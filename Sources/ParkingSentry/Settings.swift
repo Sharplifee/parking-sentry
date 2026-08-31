@@ -1,6 +1,13 @@
 import Foundation
 import Combine
 
+// Free functions rather than nested ones: a nested func inside init() captures
+// self implicitly, which Swift rejects before all stored properties are set.
+private let store = UserDefaults.standard
+private func dbl(_ k: String, _ v: Double) -> Double { store.object(forKey: k) == nil ? v : store.double(forKey: k) }
+private func int(_ k: String, _ v: Int) -> Int { store.object(forKey: k) == nil ? v : store.integer(forKey: k) }
+private func bool(_ k: String, _ v: Bool) -> Bool { store.object(forKey: k) == nil ? v : store.bool(forKey: k) }
+
 /// All tunables live here and persist to UserDefaults.
 /// Defaults are chosen for an outdoor parking lot at dusk-to-dark, camera on a tripod.
 final class Settings: ObservableObject {
@@ -40,10 +47,6 @@ final class Settings: ObservableObject {
     @Published var armDelaySeconds: Double { didSet { d.set(armDelaySeconds, forKey: "armDelaySeconds") } }
 
     private init() {
-        func dbl(_ k: String, _ v: Double) -> Double { d.object(forKey: k) == nil ? v : d.double(forKey: k) }
-        func int(_ k: String, _ v: Int) -> Int { d.object(forKey: k) == nil ? v : d.integer(forKey: k) }
-        func bool(_ k: String, _ v: Bool) -> Bool { d.object(forKey: k) == nil ? v : d.bool(forKey: k) }
-
         useFrontCamera       = bool("useFrontCamera", false)
         zoomFactor           = dbl("zoomFactor", 1.0)
         longRangeMode        = bool("longRangeMode", true)
@@ -56,7 +59,7 @@ final class Settings: ObservableObject {
         requireApproach      = bool("requireApproach", false)
         sirenEnabled         = bool("sirenEnabled", false)
         notificationsEnabled = bool("notificationsEnabled", true)
-        webhookURL           = d.string(forKey: "webhookURL") ?? ""
+        webhookURL           = store.string(forKey: "webhookURL") ?? ""
         cooldownSeconds      = dbl("cooldownSeconds", 20.0)
         armDelaySeconds      = dbl("armDelaySeconds", 15.0)
     }
