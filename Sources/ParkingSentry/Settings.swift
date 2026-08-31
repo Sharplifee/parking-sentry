@@ -32,8 +32,10 @@ final class Settings: ObservableObject {
     @Published var alertDistanceMeters: Double { didSet { d.set(alertDistanceMeters, forKey: "alertDistanceMeters") } }
     /// Assumed standing height of a person, used by the pinhole range estimate.
     @Published var subjectHeightMeters: Double { didSet { d.set(subjectHeightMeters, forKey: "subjectHeightMeters") } }
-    /// Suppress alerts when Vision classifies the mover as a cat or dog.
-    @Published var ignoreAnimals: Bool { didSet { d.set(ignoreAnimals, forKey: "ignoreAnimals") } }
+    /// Which kinds of subject are allowed to raise an alert.
+    @Published var alertCategories: Set<SubjectCategory> {
+        didSet { d.set(alertCategories.map(\.rawValue), forKey: "alertCategories") }
+    }
     /// Also require the subject to be getting closer, not just present.
     @Published var requireApproach: Bool { didSet { d.set(requireApproach, forKey: "requireApproach") } }
 
@@ -55,7 +57,11 @@ final class Settings: ObservableObject {
         confirmHits          = int("confirmHits", 3)
         alertDistanceMeters  = dbl("alertDistanceMeters", 30.0)
         subjectHeightMeters  = dbl("subjectHeightMeters", 1.72)
-        ignoreAnimals        = bool("ignoreAnimals", true)
+        if let raw = store.stringArray(forKey: "alertCategories") {
+            alertCategories = Set(raw.compactMap(SubjectCategory.init(rawValue:)))
+        } else {
+            alertCategories = [.person, .vehicle]
+        }
         requireApproach      = bool("requireApproach", false)
         sirenEnabled         = bool("sirenEnabled", false)
         notificationsEnabled = bool("notificationsEnabled", true)

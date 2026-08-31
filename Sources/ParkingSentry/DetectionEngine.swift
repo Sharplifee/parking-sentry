@@ -18,7 +18,7 @@ struct BoxOverlay: Identifiable {
     let rect: CGRect          // normalized, origin bottom-left
     let label: String
     let confirmed: Bool
-    let isAnimal: Bool
+    let category: SubjectCategory
 }
 
 final class DetectionEngine: NSObject, ObservableObject {
@@ -35,6 +35,8 @@ final class DetectionEngine: NSObject, ObservableObject {
     @Published var events: [SentryEvent] = []
     @Published var depthAvailable = false
     @Published var visionHz: Double = 0
+    @Published var modelStatus = "loading"
+
 
     // MARK: Capture
     let session = AVCaptureSession()
@@ -48,7 +50,7 @@ final class DetectionEngine: NSObject, ObservableObject {
 
     // MARK: Pipeline
     private let gate = MotionGate()
-    private let detector = HumanDetector()
+    private let detector = SubjectDetector()
     private let ranger = DistanceEstimator()
     private let tracker = Tracker()
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
@@ -207,7 +209,11 @@ final class DetectionEngine: NSObject, ObservableObject {
         cam.unlockForConfiguration()
 
         session.commitConfiguration()
-        DispatchQueue.main.async { self.depthAvailable = haveDepth }
+        let ml = detector.modelLoaded ? "YOLOv3-Tiny" : ("model failed: " + (detector.modelLoadError ?? "unknown"))
+        DispatchQueue.main.async {
+            self.depthAvailable = haveDepth
+            self.modelStatus = ml
+        }
     }
 
     private func applyRotation(_ angle: CGFloat) {
@@ -251,7 +257,7 @@ final class DetectionEngine: NSObject, ObservableObject {
                                        orientation: .up,
                                        roi: dueToMotion ? motion.region : nil,
                                        minConfidence: Float(settings.personConfidence),
-                                       checkAnimals: settings.ignoreAnimals)
+                                       wantUnknownObjects: settings.alertCategories.contains(.unknown))
 
         visionTimestamps.append(now)
         visionTimestamps.removeAll { now.timeIntervalSince($0) > 2 }
@@ -261,9 +267,9 @@ final class DetectionEngine: NSObject, ObservableObject {
 
         var sourceLabel = "—"
         for t in tracks where t.misses == 0 {
-            let est = ranger.estimate(box: t.box,
-                                      depthData: depth,
-                                      subjectHeightMeters: settings.subjectHeightMeters)
+            let est = ranger.estimate(box: t.box, depthData: depth,
+                                      metrics: COCOClass.metrics(for: t.label,
+                                                                 personHeight: settings.subjectHeightMeters))
             if let m = est.meters {
                 tracker.recordRange(m, for: t)
                 sourceLabel = est.source.rawValue
@@ -271,20 +277,13 @@ final class DetectionEngine: NSObject, ObservableObject {
         }
 
         let boxes = tracks.filter { $0.misses <= 2 }.map { t -> BoxOverlay in
-            let r = t.smoothedRange
-            let label: String
-            if t.isAnimal {
-                label = (t.animalLabel ?? "animal").capitalized
-            } else if let r {
-                label = String(format: "%.0f m", r)
-            } else {
-                label = "person"
-            }
+            let name = t.label.capitalized
+            let text = t.smoothedRange.map { String(format: "%@  %.0f m", name, $0) } ?? name
             return BoxOverlay(id: t.id,
                               rect: t.box,
-                              label: label,
+                              label: text,
                               confirmed: t.hits >= settings.confirmHits,
-                              isAnimal: t.isAnimal)
+                              category: t.category)
         }
 
         DispatchQueue.main.async {
@@ -301,11 +300,12 @@ final class DetectionEngine: NSObject, ObservableObject {
 
     private func evaluateAlert(track: Track, pixelBuffer: CVPixelBuffer) {
         guard track.hits >= settings.confirmHits else { return }
-        if settings.ignoreAnimals && track.isAnimal { return }
+        guard settings.alertCategories.contains(track.category) else { return }
 
-        // A real person usually yields several confident pose joints; requiring at least a
-        // couple on top of the rectangle detection removes most remaining texture false hits.
-        if track.maxJoints < 2 && track.bestConfidence < 0.8 { return }
+        // People get an extra check: a real person usually yields several confident pose
+        // joints, and requiring a couple on top of the rectangle removes texture false hits.
+        // Other categories rely on the classifier's own label confidence instead.
+        if track.category == .person, track.maxJoints < 2, track.bestConfidence < 0.8 { return }
 
         if let last = track.lastAlert,
            Date().timeIntervalSince(last) < settings.cooldownSeconds { return }
@@ -318,7 +318,7 @@ final class DetectionEngine: NSObject, ObservableObject {
         track.lastAlert = Date()
 
         let rangeText = range.map { String(format: "%.0f m away", $0) } ?? "range unknown"
-        let title = "Person detected"
+        let title = track.label.capitalized + " detected"
         let body = "\(rangeText) · \(Int(track.bestConfidence * 100))% confidence · \(rangeSourceLabel) range"
 
         let jpeg = snapshotJPEG(from: pixelBuffer)
@@ -326,7 +326,7 @@ final class DetectionEngine: NSObject, ObservableObject {
 
         let image = jpeg.flatMap { UIImage(data: $0) }
         DispatchQueue.main.async {
-            self.status = "ALERT · \(rangeText)"
+            self.status = "ALERT · \(track.label.capitalized) · \(rangeText)"
             self.events.insert(SentryEvent(date: Date(),
                                            text: body,
                                            rangeMeters: range,

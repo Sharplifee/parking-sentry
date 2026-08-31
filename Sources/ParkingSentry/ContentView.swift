@@ -49,6 +49,7 @@ struct ContentView: View {
                 Text(String(format: "shadow-rejected %.0f%%", engine.shadowRejectFraction * 100))
                 Text(String(format: "%.0f Hz", engine.visionHz))
                 Text("range \(engine.rangeSourceLabel)")
+                Text(engine.modelStatus)
             }
             .font(.system(size: 11, design: .monospaced))
             .foregroundStyle(.secondary)

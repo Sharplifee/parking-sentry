@@ -23,8 +23,20 @@ struct SettingsView: View {
                     slider("Motion sensitivity", value: $settings.motionSensitivity, range: 0.001...0.05, step: 0.001,
                            format: { String(format: "%.3f", $0) })
                     Stepper("Confirm over \(settings.confirmHits) frames", value: $settings.confirmHits, in: 1...10)
-                    Toggle("Ignore cats and dogs", isOn: $settings.ignoreAnimals)
                     Toggle("Only alert when closing in", isOn: $settings.requireApproach)
+                }
+
+                Section("Alert me about") {
+                    ForEach(SubjectCategory.allCases, id: \.rawValue) { cat in
+                        Toggle(cat.display, isOn: Binding(
+                            get: { settings.alertCategories.contains(cat) },
+                            set: { on in
+                                if on { settings.alertCategories.insert(cat) }
+                                else { settings.alertCategories.remove(cat) }
+                            }))
+                    }
+                    Text("People, vehicles and animals are named by an on-device classifier. \"Unidentified movement\" catches anything coherent it cannot name — useful, but the noisiest setting here.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
 
                 Section("Range") {
@@ -32,6 +44,8 @@ struct SettingsView: View {
                            format: { $0 == 0 ? "any distance" : String(format: "%.0f m", $0) })
                     slider("Assumed person height", value: $settings.subjectHeightMeters, range: 1.4...2.0, step: 0.01,
                            format: { String(format: "%.2f m", $0) })
+                    Text("Vehicles are ranged from width rather than height, using standard widths per class. Anything with no known real-world size reports range unknown instead of a guess.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Text(engine.depthAvailable
                          ? "LiDAR gives true range under about 5 m; beyond that the app falls back to an optical estimate from apparent height."
                          : "No depth sensor on this camera, so range comes from apparent height and the lens's own focal length. Typical error is 10 to 15 percent for a fully visible standing person.")

@@ -67,7 +67,15 @@ final class OverlayView: UIView {
             let r = convert(b.rect)
             guard r.width > 1, r.height > 1 else { continue }
 
-            let color: UIColor = b.isAnimal ? .systemTeal : (b.confirmed ? .systemRed : .systemYellow)
+            var color: UIColor
+            switch b.category {
+            case .person:  color = .systemRed
+            case .vehicle: color = .systemOrange
+            case .animal:  color = .systemTeal
+            case .object:  color = .systemPurple
+            case .unknown: color = .systemGray
+            }
+            if !b.confirmed { color = color.withAlphaComponent(0.55) }
             ctx.setStrokeColor(color.cgColor)
             ctx.stroke(r)
 

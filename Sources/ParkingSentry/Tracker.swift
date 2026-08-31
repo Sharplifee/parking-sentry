@@ -15,8 +15,8 @@ final class Track {
     var lastSeen: Date = Date()
     var lastAlert: Date?
     var rangeHistory: [Double] = []
-    var isAnimal: Bool = false
-    var animalLabel: String?
+    var category: SubjectCategory = .unknown
+    var label: String = "movement"
     var bestConfidence: Float = 0
     var maxJoints: Int = 0
 
@@ -67,8 +67,11 @@ final class Tracker {
                 track.hits += 1
                 track.misses = 0
                 track.lastSeen = Date()
-                track.isAnimal = s.isAnimal
-                if s.isAnimal { track.animalLabel = s.animalLabel }
+                // A named class always beats a bare "something moved".
+                if s.category != .unknown || track.category == .unknown {
+                    track.category = s.category
+                    track.label = s.label
+                }
                 track.bestConfidence = max(track.bestConfidence, s.confidence)
                 track.maxJoints = max(track.maxJoints, s.jointCount)
                 touched.insert(track.id)
@@ -77,8 +80,8 @@ final class Tracker {
 
         for s in unmatched {
             let t = Track(id: nextID, box: s.boundingBox)
-            t.isAnimal = s.isAnimal
-            t.animalLabel = s.animalLabel
+            t.category = s.category
+            t.label = s.label
             t.bestConfidence = s.confidence
             t.maxJoints = s.jointCount
             nextID += 1

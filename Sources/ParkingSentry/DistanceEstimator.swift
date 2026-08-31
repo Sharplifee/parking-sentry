@@ -106,31 +106,38 @@ final class DistanceEstimator {
         return Double(samples[samples.count / 2])
     }
 
-    /// Range from apparent height. distance = (real height x focal length) / pixel height.
-    func pinholeRange(box: CGRect, subjectHeightMeters: Double) -> RangeEstimate {
-        let truncated = box.minY < 0.015 || box.maxY > 0.985
+    /// Range from apparent size. distance = (real size x focal length) / pixel size.
+    /// Height is used for upright subjects, width for vehicles, because a vehicle's
+    /// apparent height swings wildly with viewing angle while its width barely moves.
+    func opticalRange(box: CGRect, metrics: SubjectMetrics) -> RangeEstimate {
+        let truncated = box.minY < 0.015 || box.maxY > 0.985 || box.minX < 0.01 || box.maxX > 0.99
         guard let fy = focalYPixels, fy > 0 else {
             return RangeEstimate(meters: nil, source: .unavailable, truncated: truncated)
         }
-        let pixelHeight = Double(box.height) * bufferHeightPixels
-        guard pixelHeight > 8 else {
+
+        var d: Double?
+        if let h = metrics.heightMeters {
+            if truncated { return RangeEstimate(meters: nil, source: .unavailable, truncated: true) }
+            let pixels = Double(box.height) * bufferHeightPixels
+            if pixels > 8 { d = (h * fy) / pixels }
+        } else if let w = metrics.widthMeters {
+            let pixels = Double(box.width) * bufferWidthPixels
+            if pixels > 8 { d = (w * fy) / pixels }
+        } else {
+            // No trustworthy real-world size for this class - say so rather than guess.
             return RangeEstimate(meters: nil, source: .unavailable, truncated: truncated)
         }
-        if truncated {
-            // Feet or head cut off — the height cue is meaningless, refuse to guess.
-            return RangeEstimate(meters: nil, source: .unavailable, truncated: true)
-        }
-        let d = (subjectHeightMeters * fy) / pixelHeight
-        guard d.isFinite, d > 0.3, d < 300 else {
+
+        guard let dist = d, dist.isFinite, dist > 0.3, dist < 400 else {
             return RangeEstimate(meters: nil, source: .unavailable, truncated: truncated)
         }
-        return RangeEstimate(meters: d, source: .pinhole, truncated: false)
+        return RangeEstimate(meters: dist, source: .pinhole, truncated: false)
     }
 
-    func estimate(box: CGRect, depthData: AVDepthData?, subjectHeightMeters: Double) -> RangeEstimate {
+    func estimate(box: CGRect, depthData: AVDepthData?, metrics: SubjectMetrics) -> RangeEstimate {
         if let close = lidarRange(depthData: depthData, box: box) {
             return RangeEstimate(meters: close, source: .lidar, truncated: false)
         }
-        return pinholeRange(box: box, subjectHeightMeters: subjectHeightMeters)
+        return opticalRange(box: box, metrics: metrics)
     }
 }
