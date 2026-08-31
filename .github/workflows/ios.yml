@@ -1,0 +1,125 @@
+name: iOS ad hoc build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'Sources/**'
+      - 'project.yml'
+      - '.github/workflows/ios.yml'
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Apple rejects anything built against an SDK older than iOS 26,
+      # so the runner must be macos-26 with Xcode 26 selected explicitly.
+      - name: Select Xcode 26
+        run: |
+          ls /Applications | grep -i '^Xcode' || true
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Import signing certificate
+        env:
+          APPLE_DIST_P12: ${{ secrets.APPLE_DIST_P12 }}
+          APPLE_DIST_P12_PASSWORD: ${{ secrets.APPLE_DIST_P12_PASSWORD }}
+        run: |
+          echo "$APPLE_DIST_P12" | base64 --decode > /tmp/dist.p12
+
+          security create-keychain -p runner build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security default-keychain -s build.keychain
+          security list-keychains -d user -s build.keychain login.keychain-db
+          security unlock-keychain -p runner build.keychain
+
+          # A fresh keychain has no WWDR intermediate, so a perfectly valid leaf
+          # reports "certificate is invalid ... may have been revoked or expired".
+          curl -fsSL https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer -o /tmp/wwdr.cer
+          security import /tmp/wwdr.cer -k build.keychain -T /usr/bin/codesign || true
+
+          security import /tmp/dist.p12 -k build.keychain -P "$APPLE_DIST_P12_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k runner build.keychain
+
+          echo "--- identities visible to codesign ---"
+          security find-identity -v -p codesigning build.keychain
+
+      - name: Install provisioning profile
+        env:
+          APPLE_PROVISION_PROFILE: ${{ secrets.APPLE_PROVISION_PROFILE }}
+        run: |
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          echo "$APPLE_PROVISION_PROFILE" | base64 --decode > ~/Library/MobileDevice/Provisioning\ Profiles/parkingsentry.mobileprovision
+          ls -l ~/Library/MobileDevice/Provisioning\ Profiles/
+
+      - name: Generate project and stamp build number
+        run: |
+          xcodegen generate
+          PLIST=Sources/ParkingSentry/Support/Info.plist
+          BUILD=$((GITHUB_RUN_NUMBER + 100))
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" "$PLIST"
+          echo "BUILD_NUMBER=$BUILD" >> "$GITHUB_ENV"
+          echo "CFBundleVersion = $BUILD"
+
+      - name: Archive
+        run: |
+          xcodebuild -project ParkingSentry.xcodeproj \
+            -scheme ParkingSentry \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/ParkingSentry.xcarchive \
+            DEVELOPMENT_TEAM=${{ secrets.APPLE_TEAM_ID }} \
+            CODE_SIGN_STYLE=Manual \
+            archive
+
+      - name: Export ad hoc IPA
+        run: |
+          # Under manual signing the bundle id MUST map to the profile NAME here,
+          # or exportArchive fails with "requires a provisioning profile" even
+          # though the archive itself is correctly signed.
+          cat > /tmp/ExportOptions.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>release-testing</string>
+            <key>teamID</key><string>${{ secrets.APPLE_TEAM_ID }}</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>stripSwiftSymbols</key><true/>
+            <key>compileBitcode</key><false/>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>com.connor.parkingsentry</key><string>ParkingSentry AdHoc</string>
+            </dict>
+          </dict>
+          </plist>
+          PLIST
+          xcodebuild -exportArchive \
+            -archivePath build/ParkingSentry.xcarchive \
+            -exportOptionsPlist /tmp/ExportOptions.plist \
+            -exportPath build/export
+          ls -lh build/export
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ParkingSentry-ipa
+          path: build/export/*.ipa
+          retention-days: 30
+
+      - name: Build log on failure
+        if: failure()
+        run: |
+          echo "--- provisioning profiles present ---"
+          ls -l ~/Library/MobileDevice/Provisioning\ Profiles/ || true
+          security find-identity -v -p codesigning build.keychain || true

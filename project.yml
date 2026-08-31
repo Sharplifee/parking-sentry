@@ -1,0 +1,35 @@
+name: ParkingSentry
+options:
+  bundleIdPrefix: com.connor
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: XF783932R2
+    CODE_SIGN_STYLE: Manual
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+
+targets:
+  ParkingSentry:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/ParkingSentry
+        excludes:
+          - "Support/Info.plist"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.connor.parkingsentry
+        PRODUCT_NAME: ParkingSentry
+        INFOPLIST_FILE: Sources/ParkingSentry/Support/Info.plist
+        TARGETED_DEVICE_FAMILY: "1,2"
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        CODE_SIGN_IDENTITY: "Apple Distribution"
+        PROVISIONING_PROFILE_SPECIFIER: "ParkingSentry AdHoc"
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        GENERATE_INFOPLIST_FILE: NO
