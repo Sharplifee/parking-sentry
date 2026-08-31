@@ -14,6 +14,8 @@ final class Track {
     var firstSeen: Date = Date()
     var lastSeen: Date = Date()
     var lastAlert: Date?
+    /// (timestamp, range in metres, box centre) so speed is measured, not guessed.
+    var samples: [(t: Date, range: Double?, centre: CGPoint)] = []
     var rangeHistory: [Double] = []
     var category: SubjectCategory = .unknown
     var label: String = "movement"
@@ -31,14 +33,38 @@ final class Track {
         return tail[tail.count / 2]
     }
 
-    /// Negative = closing on the camera, in meters per second.
+    /// Negative = closing on the camera, in metres per second.
+    /// Measured across the actual timestamps of the samples, not an assumed frame rate.
     var closingRate: Double? {
-        guard rangeHistory.count >= 4 else { return nil }
-        let recent = Array(rangeHistory.suffix(6))
-        let first = recent.prefix(recent.count / 2).reduce(0, +) / Double(recent.count / 2)
-        let last = recent.suffix(recent.count / 2).reduce(0, +) / Double(recent.count / 2)
-        let dt = max(0.2, Date().timeIntervalSince(firstSeen) / 2)
-        return (last - first) / dt
+        let ranged = samples.compactMap { s -> (Date, Double)? in s.range.map { (s.t, $0) } }
+        guard ranged.count >= 4, let first = ranged.first, let last = ranged.last else { return nil }
+        let dt = last.0.timeIntervalSince(first.0)
+        guard dt > 0.4 else { return nil }
+        let half = ranged.count / 2
+        let early = ranged.prefix(half).map(\.1).reduce(0, +) / Double(half)
+        let late = ranged.suffix(half).map(\.1).reduce(0, +) / Double(half)
+        return (late - early) / dt
+    }
+
+    /// Sideways speed in m/s, from angular movement across the frame scaled by range.
+    /// Without a range there is no way to turn pixels into metres, so it returns nil.
+    func lateralRate(horizontalFOVRadians: Double) -> Double? {
+        guard let r = smoothedRange, samples.count >= 4,
+              let first = samples.first, let last = samples.last else { return nil }
+        let dt = last.t.timeIntervalSince(first.t)
+        guard dt > 0.4 else { return nil }
+        let dx = Double(last.centre.x - first.centre.x)
+        let dy = Double(last.centre.y - first.centre.y)
+        let angular = sqrt(dx * dx + dy * dy) * horizontalFOVRadians
+        return (angular * r) / dt
+    }
+
+    /// Total speed in m/s combining closing and lateral components.
+    func speed(horizontalFOVRadians: Double) -> Double? {
+        let c = closingRate ?? 0
+        let l = lateralRate(horizontalFOVRadians: horizontalFOVRadians) ?? 0
+        guard closingRate != nil || lateralRate(horizontalFOVRadians: horizontalFOVRadians) != nil else { return nil }
+        return sqrt(c * c + l * l)
     }
 }
 
@@ -96,9 +122,16 @@ final class Tracker {
         return tracks
     }
 
-    func recordRange(_ meters: Double, for track: Track) {
-        track.rangeHistory.append(meters)
-        if track.rangeHistory.count > 30 { track.rangeHistory.removeFirst() }
+    func recordSample(range: Double?, for track: Track) {
+        if let r = range {
+            track.rangeHistory.append(r)
+            if track.rangeHistory.count > 30 { track.rangeHistory.removeFirst() }
+        }
+        track.samples.append((Date(), range, CGPoint(x: track.box.midX, y: track.box.midY)))
+        // Keep roughly the last three seconds; older points make speed sluggish.
+        let cutoff = Date().addingTimeInterval(-3.0)
+        track.samples.removeAll { $0.t < cutoff }
+        if track.samples.count > 40 { track.samples.removeFirst(track.samples.count - 40) }
     }
 
     func reset() {

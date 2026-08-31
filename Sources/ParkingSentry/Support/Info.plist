@@ -21,6 +21,7 @@
   <key>ITSAppUsesNonExemptEncryption</key><false/>
   <key>UIStatusBarHidden</key><true/>
   <key>UIViewControllerBasedStatusBarAppearance</key><false/>
+  <key>NSMicrophoneUsageDescription</key><string>MotionSentry measures sound level and uses a sudden noise as a detection trigger. Audio is not recorded.</string>
   <key>NSCameraUsageDescription</key><string>Parking Sentry watches the camera for people approaching. Video never leaves this device.</string>
   <key>UISupportedInterfaceOrientations</key>
   <array>

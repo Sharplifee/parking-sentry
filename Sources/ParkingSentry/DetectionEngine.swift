@@ -36,6 +36,8 @@ final class DetectionEngine: NSObject, ObservableObject {
     @Published var depthAvailable = false
     @Published var visionHz: Double = 0
     @Published var modelStatus = "loading"
+    @Published var soundLevelDB: Float = 0
+    @Published var ambientDB: Float = 0
 
 
     // MARK: Capture
@@ -52,6 +54,7 @@ final class DetectionEngine: NSObject, ObservableObject {
     private let gate = MotionGate()
     private let detector = SubjectDetector()
     private let ranger = DistanceEstimator()
+    private let audio = AudioMonitor()
     private let tracker = Tracker()
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
@@ -60,6 +63,9 @@ final class DetectionEngine: NSObject, ObservableObject {
     private var lastVisionRun: Date = .distantPast
     private var lastForcedVision: Date = .distantPast
     private var visionTimestamps: [Date] = []
+
+    /// Horizontal field of view of the active format, in radians per unit of normalized x.
+    private var fovRadians: Double = 60 * .pi / 180
 
     private let minVisionInterval: TimeInterval = 0.12   // ~8 Hz ceiling
     private let forcedVisionInterval: TimeInterval = 2.0 // catch slow creep the gate missed
@@ -71,6 +77,7 @@ final class DetectionEngine: NSObject, ObservableObject {
             guard let self else { return }
             if self.session.inputs.isEmpty { self.configure() }
             if !self.session.isRunning { self.session.startRunning() }
+            do { try self.audio.start() } catch { print("audio monitor failed: \(error)") }
             DispatchQueue.main.async {
                 self.isRunning = true
                 self.status = "Learning background"
@@ -87,6 +94,7 @@ final class DetectionEngine: NSObject, ObservableObject {
         sessionQueue.async { [weak self] in
             guard let self else { return }
             if self.session.isRunning { self.session.stopRunning() }
+            self.audio.stop()
             DispatchQueue.main.async {
                 self.isRunning = false
                 self.isArmed = false
@@ -170,6 +178,7 @@ final class DetectionEngine: NSObject, ObservableObject {
         }
         // Fallback focal length derived from the active format's field of view.
         ranger.horizontalFOVDegrees = Double(cam.activeFormat.videoFieldOfView)
+        fovRadians = Double(cam.activeFormat.videoFieldOfView) * .pi / 180
 
         var haveDepth = false
         if session.canAddOutput(depthOutput) {
@@ -243,7 +252,13 @@ final class DetectionEngine: NSObject, ObservableObject {
         let now = Date()
         let dueToMotion = motion.score >= Float(settings.motionSensitivity)
         let dueToClock = now.timeIntervalSince(lastForcedVision) > forcedVisionInterval
-        guard dueToMotion || dueToClock else {
+        // A car door or breaking glass happens before anything enters frame.
+        let dueToSound = settings.soundTrigger && audio.transient
+        DispatchQueue.main.async {
+            self.soundLevelDB = self.audio.currentDB
+            self.ambientDB = self.audio.ambientDB
+        }
+        guard dueToMotion || dueToClock || dueToSound else {
             if tracker.active.isEmpty {
                 DispatchQueue.main.async { if self.overlays.isEmpty == false { self.overlays = [] } }
             }
@@ -255,7 +270,7 @@ final class DetectionEngine: NSObject, ObservableObject {
 
         let subjects = detector.detect(in: pixelBuffer,
                                        orientation: .up,
-                                       roi: dueToMotion ? motion.region : nil,
+                                       roi: (dueToMotion && !dueToSound) ? motion.region : nil,
                                        minConfidence: Float(settings.personConfidence),
                                        wantUnknownObjects: settings.alertCategories.contains(.unknown))
 
@@ -270,15 +285,16 @@ final class DetectionEngine: NSObject, ObservableObject {
             let est = ranger.estimate(box: t.box, depthData: depth,
                                       metrics: COCOClass.metrics(for: t.label,
                                                                  personHeight: settings.subjectHeightMeters))
-            if let m = est.meters {
-                tracker.recordRange(m, for: t)
-                sourceLabel = est.source.rawValue
-            }
+            tracker.recordSample(range: est.meters, for: t)
+            if est.meters != nil { sourceLabel = est.source.rawValue }
         }
 
         let boxes = tracks.filter { $0.misses <= 2 }.map { t -> BoxOverlay in
             let name = t.label.capitalized
-            let text = t.smoothedRange.map { String(format: "%@  %.0f m", name, $0) } ?? name
+            var text = t.smoothedRange.map { String(format: "%@  %.0f m", name, $0) } ?? name
+            if let mps = t.speed(horizontalFOVRadians: self.fovRadians), mps > 0.3 {
+                text += String(format: "  %.0f mph", mps * 2.23694)
+            }
             return BoxOverlay(id: t.id,
                               rect: t.box,
                               label: text,
@@ -318,8 +334,13 @@ final class DetectionEngine: NSObject, ObservableObject {
         track.lastAlert = Date()
 
         let rangeText = range.map { String(format: "%.0f m away", $0) } ?? "range unknown"
+        let speedText = track.speed(horizontalFOVRadians: fovRadians)
+            .filter { $0 > 0.3 }
+            .map { String(format: " · %.0f mph", $0 * 2.23694) } ?? ""
+        let approachText = (track.closingRate.map { $0 < -0.3 } ?? false) ? " · closing" : ""
         let title = track.label.capitalized + " detected"
-        let body = "\(rangeText) · \(Int(track.bestConfidence * 100))% confidence · \(rangeSourceLabel) range"
+        let body = "\(rangeText)\(speedText)\(approachText) · \(Int(audio.currentDB)) dB · "
+            + "\(Int(track.bestConfidence * 100))% confidence · \(rangeSourceLabel) range"
 
         let jpeg = snapshotJPEG(from: pixelBuffer)
         AlertManager.shared.fire(title: title, body: body, snapshot: jpeg, settings: settings)

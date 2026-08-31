@@ -36,6 +36,8 @@ final class Settings: ObservableObject {
     @Published var alertCategories: Set<SubjectCategory> {
         didSet { d.set(alertCategories.map(\.rawValue), forKey: "alertCategories") }
     }
+    /// Let a sharp sound wake the detector even when the picture has not changed.
+    @Published var soundTrigger: Bool { didSet { d.set(soundTrigger, forKey: "soundTrigger") } }
     /// Also require the subject to be getting closer, not just present.
     @Published var requireApproach: Bool { didSet { d.set(requireApproach, forKey: "requireApproach") } }
 
@@ -63,6 +65,7 @@ final class Settings: ObservableObject {
             alertCategories = [.person, .vehicle]
         }
         requireApproach      = bool("requireApproach", false)
+        soundTrigger         = bool("soundTrigger", true)
         sirenEnabled         = bool("sirenEnabled", false)
         notificationsEnabled = bool("notificationsEnabled", true)
         webhookURL           = store.string(forKey: "webhookURL") ?? ""

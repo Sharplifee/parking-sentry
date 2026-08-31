@@ -50,6 +50,7 @@ struct ContentView: View {
                 Text(String(format: "%.0f Hz", engine.visionHz))
                 Text("range \(engine.rangeSourceLabel)")
                 Text(engine.modelStatus)
+                Text(String(format: "%.0f dB (amb %.0f)", engine.soundLevelDB, engine.ambientDB))
             }
             .font(.system(size: 11, design: .monospaced))
             .foregroundStyle(.secondary)

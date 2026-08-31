@@ -24,6 +24,7 @@ struct SettingsView: View {
                            format: { String(format: "%.3f", $0) })
                     Stepper("Confirm over \(settings.confirmHits) frames", value: $settings.confirmHits, in: 1...10)
                     Toggle("Only alert when closing in", isOn: $settings.requireApproach)
+                    Toggle("Wake on sudden sound", isOn: $settings.soundTrigger)
                 }
 
                 Section("Alert me about") {
