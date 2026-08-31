@@ -56,9 +56,11 @@ jobs:
       - name: Install provisioning profile
         env:
           APPLE_PROVISION_PROFILE: ${{ secrets.APPLE_PROVISION_PROFILE }}
+          APPLE_PROVISION_PROFILE_STORE: ${{ secrets.APPLE_PROVISION_PROFILE_STORE }}
         run: |
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          echo "$APPLE_PROVISION_PROFILE" | base64 --decode > ~/Library/MobileDevice/Provisioning\ Profiles/parkingsentry.mobileprovision
+          echo "$APPLE_PROVISION_PROFILE" | base64 --decode > ~/Library/MobileDevice/Provisioning\ Profiles/adhoc.mobileprovision
+          echo "$APPLE_PROVISION_PROFILE_STORE" | base64 --decode > ~/Library/MobileDevice/Provisioning\ Profiles/store.mobileprovision
           ls -l ~/Library/MobileDevice/Provisioning\ Profiles/
 
       - name: Generate project and stamp build number
@@ -116,6 +118,53 @@ jobs:
           name: ParkingSentry-ipa
           path: build/export/*.ipa
           retention-days: 30
+
+      - name: Export App Store IPA
+        run: |
+          cat > /tmp/ExportOptionsStore.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>${{ secrets.APPLE_TEAM_ID }}</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>uploadSymbols</key><true/>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>com.connor.parkingsentry</key><string>ParkingSentry CI</string>
+            </dict>
+          </dict>
+          </plist>
+          PLIST
+          xcodebuild -exportArchive \
+            -archivePath build/ParkingSentry.xcarchive \
+            -exportOptionsPlist /tmp/ExportOptionsStore.plist \
+            -exportPath build/store
+          ls -lh build/store
+
+      - name: Upload to TestFlight
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_APP_ID: ${{ secrets.ASC_APP_ID }}
+        run: |
+          mkdir -p ~/private_keys
+          echo "$ASC_KEY_P8" | base64 --decode > ~/private_keys/AuthKey_$ASC_KEY_ID.p8
+          IPA=$(ls build/store/*.ipa | head -1)
+          echo "Uploading $IPA"
+          set +e
+          xcrun altool --upload-app -f "$IPA" -t ios \
+            --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+          STATUS=$?
+          set -e
+          pip3 install --quiet --break-system-packages pyjwt cryptography
+          if [ $STATUS -ne 0 ]; then
+            echo "altool exited $STATUS - asking App Store Connect what it actually has"
+          fi
+          python3 scripts/verify_upload.py "$ASC_APP_ID" "$BUILD_NUMBER"
 
       - name: Build log on failure
         if: failure()
