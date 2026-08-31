@@ -14,7 +14,7 @@
   <key>LSRequiresIPhoneOS</key><true/>
   <key>UIApplicationSupportsIndirectInputEvents</key><true/>
   <key>UILaunchScreen</key><dict/>
-  <key>UIRequiredDeviceCapabilities</key><array><string>armv7</string></array>
+  <key>CFBundleIconName</key><string>AppIcon</string>
   <key>UIStatusBarHidden</key><true/>
   <key>UIViewControllerBasedStatusBarAppearance</key><false/>
   <key>NSCameraUsageDescription</key><string>Parking Sentry watches the camera for people approaching. Video never leaves this device.</string>
