@@ -334,9 +334,9 @@ final class DetectionEngine: NSObject, ObservableObject {
         track.lastAlert = Date()
 
         let rangeText = range.map { String(format: "%.0f m away", $0) } ?? "range unknown"
-        let speedText = track.speed(horizontalFOVRadians: fovRadians)
-            .filter { $0 > 0.3 }
-            .map { String(format: " · %.0f mph", $0 * 2.23694) } ?? ""
+        let mps = track.speed(horizontalFOVRadians: fovRadians)
+        let speedText = (mps != nil && mps! > 0.3)
+            ? String(format: " · %.0f mph", mps! * 2.23694) : ""
         let approachText = (track.closingRate.map { $0 < -0.3 } ?? false) ? " · closing" : ""
         let title = track.label.capitalized + " detected"
         let body = "\(rangeText)\(speedText)\(approachText) · \(Int(audio.currentDB)) dB · "
