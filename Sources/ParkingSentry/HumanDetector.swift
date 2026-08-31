@@ -52,19 +52,33 @@ final class HumanDetector {
             return []
         }
 
-        let poses = (poseRequest.results ?? [])
         let animals = (animalRequest.results ?? [])
+
+        // VNHumanBodyPoseObservation carries points, not a bounding box, so derive
+        // each skeleton's extent from its own confident joints.
+        var skeletons: [(box: CGRect, count: Int)] = []
+        for pose in (poseRequest.results ?? []) {
+            guard let pts = try? pose.recognizedPoints(.all) else { continue }
+            let good = pts.values.filter { $0.confidence > 0.3 }
+            guard let minX = good.map({ $0.location.x }).min(),
+                  let maxX = good.map({ $0.location.x }).max(),
+                  let minY = good.map({ $0.location.y }).min(),
+                  let maxY = good.map({ $0.location.y }).max() else { continue }
+            skeletons.append((CGRect(x: minX, y: minY,
+                                     width: maxX - minX, height: maxY - minY), good.count))
+        }
 
         var out: [DetectedSubject] = []
 
         for obs in (humanRequest.results ?? []) {
             guard obs.confidence >= minConfidence else { continue }
 
-            // Count recognized joints from any pose whose box overlaps this human box.
+            // Count joints from any skeleton sitting inside or overlapping this human box.
             var joints = 0
-            for pose in poses where iou(pose.boundingBox, obs.boundingBox) > 0.2 {
-                if let pts = try? pose.recognizedPoints(.all) {
-                    joints = max(joints, pts.values.filter { $0.confidence > 0.3 }.count)
+            for s in skeletons {
+                let centre = CGPoint(x: s.box.midX, y: s.box.midY)
+                if iou(s.box, obs.boundingBox) > 0.2 || obs.boundingBox.contains(centre) {
+                    joints = max(joints, s.count)
                 }
             }
 
