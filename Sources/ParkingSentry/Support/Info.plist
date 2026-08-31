@@ -15,6 +15,10 @@
   <key>UIApplicationSupportsIndirectInputEvents</key><true/>
   <key>UILaunchScreen</key><dict/>
   <key>CFBundleIconName</key><string>AppIcon</string>
+  <!-- Without this a VALID build is still not installable: App Store Connect
+       holds it as Missing Compliance and TestFlight invites fail with
+       STATE_ERROR.TESTER_INVITE.NO_INSTALLABLE_BUILDS. -->
+  <key>ITSAppUsesNonExemptEncryption</key><false/>
   <key>UIStatusBarHidden</key><true/>
   <key>UIViewControllerBasedStatusBarAppearance</key><false/>
   <key>NSCameraUsageDescription</key><string>Parking Sentry watches the camera for people approaching. Video never leaves this device.</string>
