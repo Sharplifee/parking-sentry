@@ -79,6 +79,10 @@ final class DetectionEngine: NSObject, ObservableObject {
             if !self.session.isRunning { self.session.startRunning() }
             do { try self.audio.start() } catch { print("audio monitor failed: \(error)") }
             DispatchQueue.main.async {
+                MeshClient.shared.register(hasLiDAR: self.depthAvailable, hasTrueDepth: self.depthAvailable)
+                self.startHeartbeat()
+            }
+            DispatchQueue.main.async {
                 self.isRunning = true
                 self.status = "Learning background"
                 self.tracker.reset()
@@ -95,6 +99,7 @@ final class DetectionEngine: NSObject, ObservableObject {
             guard let self else { return }
             if self.session.isRunning { self.session.stopRunning() }
             self.audio.stop()
+            DispatchQueue.main.async { self.stopHeartbeat() }
             DispatchQueue.main.async {
                 self.isRunning = false
                 self.isArmed = false
@@ -345,6 +350,16 @@ final class DetectionEngine: NSObject, ObservableObject {
         let jpeg = snapshotJPEG(from: pixelBuffer)
         AlertManager.shared.fire(title: title, body: body, snapshot: jpeg, settings: settings)
 
+        let draft = MeshEventDraft(label: track.label,
+                                   category: track.category.rawValue,
+                                   confidence: track.bestConfidence,
+                                   rangeMeters: range,
+                                   rangeSource: rangeSourceLabel == "—" ? nil : rangeSourceLabel,
+                                   speedMPH: mps.map { $0 * 2.23694 },
+                                   closing: track.closingRate.map { $0 < -0.3 },
+                                   soundDB: audio.currentDB)
+        DispatchQueue.main.async { MeshClient.shared.post(event: draft) }
+
         let image = jpeg.flatMap { UIImage(data: $0) }
         DispatchQueue.main.async {
             self.status = "ALERT · \(track.label.capitalized) · \(rangeText)"
@@ -362,6 +377,29 @@ final class DetectionEngine: NSObject, ObservableObject {
         let scaled = ci.transformed(by: CGAffineTransform(scaleX: 0.35, y: 0.35))
         guard let cg = ciContext.createCGImage(scaled, from: scaled.extent) else { return nil }
         return UIImage(cgImage: cg).jpegData(compressionQuality: 0.6)
+    }
+
+    private var heartbeatTimer: Timer?
+
+    /// Tell the mesh this node is alive and what it is hearing, so the controller can
+    /// show a node as live or stale rather than silently assuming it is still watching.
+    private func startHeartbeat() {
+        heartbeatTimer?.invalidate()
+        let fire: (Timer?) -> Void = { [weak self] _ in
+            guard let self else { return }
+            MeshClient.shared.heartbeat(armed: self.isArmed,
+                                        soundDB: self.soundLevelDB,
+                                        ambientDB: self.ambientDB)
+        }
+        fire(nil)
+        heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { t in fire(t) }
+    }
+
+    private func stopHeartbeat() {
+        heartbeatTimer?.invalidate()
+        heartbeatTimer = nil
+        MeshClient.shared.heartbeat(armed: false, soundDB: 0, ambientDB: 0)
+        MeshClient.shared.stopTimers()
     }
 
     func clearEvents() { events.removeAll() }

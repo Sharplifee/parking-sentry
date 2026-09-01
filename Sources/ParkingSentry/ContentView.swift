@@ -5,6 +5,7 @@ struct ContentView: View {
     @EnvironmentObject var settings: Settings
     @State private var showSettings = false
     @State private var showLog = false
+    @State private var showMesh = false
 
     var body: some View {
         ZStack {
@@ -25,6 +26,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showLog) {
             EventLogView().environmentObject(engine)
+        }
+        .sheet(isPresented: $showMesh) {
+            MeshView().environmentObject(engine)
         }
     }
 
@@ -89,6 +93,11 @@ struct ContentView: View {
                                 .offset(x: 6, y: -6)
                         }
                     }
+            }
+            .background(.ultraThinMaterial, in: Circle())
+
+            Button { showMesh = true } label: {
+                Image(systemName: "square.grid.2x2").padding(12)
             }
             .background(.ultraThinMaterial, in: Circle())
 
