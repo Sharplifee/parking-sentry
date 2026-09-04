@@ -35,7 +35,10 @@ final class PeerMesh: NSObject, ObservableObject {
 
     private lazy var peerID: MCPeerID = {
         let raw = MeshClient.shared.deviceName
-        let name = raw.isEmpty ? UIDevice.current.name : raw
+        var name = raw.isEmpty ? UIDevice.current.name : raw
+        // Two same-model devices otherwise show up as one indistinguishable
+        // entry; a short suffix off the stable id keeps them apart on screen.
+        name += " " + MeshClient.deviceKey.suffix(4)
         return MCPeerID(displayName: String(name.prefix(63)))
     }()
 
@@ -70,7 +73,8 @@ final class PeerMesh: NSObject, ObservableObject {
         guard !running else { return }
 
         let adv = MCNearbyServiceAdvertiser(peer: peerID,
-                                            discoveryInfo: ["app": "motionsentry"],
+                                            discoveryInfo: ["app": "motionsentry",
+                                                            "uid": MeshClient.deviceKey],
                                             serviceType: Self.service)
         adv.delegate = self
         adv.startAdvertisingPeer()
@@ -307,9 +311,19 @@ extension PeerMesh: MCNearbyServiceBrowserDelegate {
                              withDiscoveryInfo info: [String: String]?) {
         Task { @MainActor in
             guard !self.session.connectedPeers.contains(peerID) else { return }
-            // Both sides browse, so both would invite and one session gets torn
-            // down mid-handshake. Lower name invites; the other waits.
-            guard self.peerID.displayName < peerID.displayName else { return }
+
+            // Both sides browse, so without a tiebreak both invite and one
+            // session is torn down mid-handshake. Break on the stable per-install
+            // id carried in discoveryInfo — NOT on displayName, which iOS reports
+            // generically ("iPad", "iPhone") and which is identical across two
+            // devices of the same model, leaving nobody to invite.
+            let mine = MeshClient.deviceKey
+            if let theirs = info?["uid"] {
+                guard mine < theirs else { return }
+            }
+            // No id advertised (older build on the other device): invite anyway
+            // rather than sit silent. A duplicate invite is recoverable; a
+            // missed one is not.
             b.invitePeer(peerID, to: self.session, withContext: nil, timeout: 20)
         }
     }

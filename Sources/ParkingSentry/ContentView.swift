@@ -18,7 +18,21 @@ struct ContentView: View {
             CameraPreview(session: engine.session, overlays: engine.overlays)
                 .ignoresSafeArea()
 
-            if !engine.previewLive {
+            if let problem = engine.cameraProblem {
+                VStack(spacing: 14) {
+                    Image(systemName: "video.slash.fill").font(.largeTitle)
+                    Text(problem)
+                        .font(.callout).multilineTextAlignment(.center)
+                        .padding(.horizontal, 36)
+                    Button("Open Settings") {
+                        if let u = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(u)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .foregroundStyle(.white)
+            } else if !engine.previewLive {
                 VStack(spacing: 10) {
                     ProgressView().tint(.white)
                     Text("Starting camera…")

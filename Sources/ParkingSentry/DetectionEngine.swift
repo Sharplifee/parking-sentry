@@ -41,6 +41,10 @@ final class DetectionEngine: NSObject, ObservableObject {
     @Published var visionHz: Double = 0
     @Published var modelStatus = "loading"
     @Published var previewLive = false
+    /// Non-nil when the camera could not be brought up. Shown on screen, because
+    /// the alternative — a black rectangle and a status nobody reads — is what
+    /// made an iPad look identical to a working device that just saw darkness.
+    @Published var cameraProblem: String?
     @Published var soundLevelDB: Float = 0
     @Published var ambientDB: Float = 0
 
@@ -89,12 +93,43 @@ final class DetectionEngine: NSObject, ObservableObject {
     /// simply black until you tap Arm, which reads as a broken app and gives you
     /// no way to frame the shot before starting.
     func startPreview() {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            reallyStartPreview()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                guard let self else { return }
+                if granted { self.reallyStartPreview() }
+                else { DispatchQueue.main.async {
+                    self.cameraProblem = "Camera access was declined. Enable it in Settings → MotionSentry."
+                } }
+            }
+        default:
+            cameraProblem = "Camera access is off for MotionSentry. Turn it on in Settings → MotionSentry."
+        }
+        // The mic is used for sound triggering and the intercom; ask once here
+        // so the first push-to-talk isn't the thing that surprises you.
+        if AVAudioApplication.shared.recordPermission == .undetermined {
+            AVAudioApplication.requestRecordPermission { _ in }
+        }
+    }
+
+    private func reallyStartPreview() {
         sessionQueue.async { [weak self] in
             guard let self else { return }
             guard !self.session.isRunning else { return }
             if self.session.inputs.isEmpty { self.configure() }
+            // Starting a session with no inputs yields a black rectangle and no
+            // error; refuse instead so the reason reaches the screen.
+            guard !self.session.inputs.isEmpty else {
+                DispatchQueue.main.async { self.previewLive = false }
+                return
+            }
             self.session.startRunning()
-            DispatchQueue.main.async { self.previewLive = true }
+            DispatchQueue.main.async {
+                self.previewLive = self.session.isRunning
+                if self.session.isRunning { self.cameraProblem = nil }
+            }
         }
     }
 
@@ -179,22 +214,41 @@ final class DetectionEngine: NSObject, ObservableObject {
     private func configure() {
         session.beginConfiguration()
 
-        let wanted: AVCaptureSession.Preset = settings.longRangeMode ? .hd4K3840x2160 : .hd1920x1080
-        session.sessionPreset = session.canSetSessionPreset(wanted) ? wanted : .hd1920x1080
+        // Walk down until something sticks: several iPads reject 4K, and an
+        // unsupported preset leaves the session running with no usable output.
+        let ladder: [AVCaptureSession.Preset] = settings.longRangeMode
+            ? [.hd4K3840x2160, .hd1920x1080, .hd1280x720, .high]
+            : [.hd1920x1080, .hd1280x720, .high]
+        session.sessionPreset = ladder.first { session.canSetSessionPreset($0) } ?? .high
 
         let position: AVCaptureDevice.Position = settings.useFrontCamera ? .front : .back
         let types: [AVCaptureDevice.DeviceType] = position == .back
             ? [.builtInLiDARDepthCamera, .builtInDualWideCamera, .builtInWideAngleCamera]
             : [.builtInTrueDepthCamera, .builtInWideAngleCamera]
 
-        let discovery = AVCaptureDevice.DiscoverySession(deviceTypes: types,
-                                                         mediaType: .video,
-                                                         position: position)
-        guard let cam = discovery.devices.first,
-              let input = try? AVCaptureDeviceInput(device: cam),
-              session.canAddInput(input) else {
+        var found = AVCaptureDevice.DiscoverySession(deviceTypes: types,
+                                                     mediaType: .video,
+                                                     position: position).devices
+        if found.isEmpty {
+            // iPads vary far more than iPhones in which camera types they expose;
+            // fall back to any camera at all rather than showing black.
+            found = AVCaptureDevice.DiscoverySession(
+                deviceTypes: [.builtInWideAngleCamera, .builtInDualWideCamera,
+                              .builtInTrueDepthCamera, .builtInLiDARDepthCamera],
+                mediaType: .video, position: .unspecified).devices
+        }
+        guard let cam = found.first else {
             session.commitConfiguration()
-            DispatchQueue.main.async { self.status = "No usable camera" }
+            DispatchQueue.main.async {
+                self.cameraProblem = "No camera available on this device."
+            }
+            return
+        }
+        guard let input = try? AVCaptureDeviceInput(device: cam), session.canAddInput(input) else {
+            session.commitConfiguration()
+            DispatchQueue.main.async {
+                self.cameraProblem = "This device's camera could not be opened. Close any other app using it and reopen MotionSentry."
+            }
             return
         }
         session.addInput(input)
