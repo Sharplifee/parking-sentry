@@ -26,7 +26,7 @@ struct VideoWallView: View {
 
             if stealth { stealthCurtain }
         }
-        .onAppear { mesh.startBrowsing() }
+        .onAppear { mesh.start() }
         .overlay(alignment: .topTrailing) { if !stealth { closeButton } }
         .overlay(alignment: .bottom) { if !stealth { bottomBar } }
         .statusBarHidden(stealth)
@@ -75,9 +75,10 @@ struct VideoWallView: View {
                 Rectangle().fill(Color(white: 0.1)).aspectRatio(16.0/10.0, contentMode: .fit)
                     .overlay(
                         VStack(spacing: 6) {
-                            Image(systemName: "video.slash")
-                            Text("connected, no video yet").font(.caption2)
-                        }.foregroundStyle(.white.opacity(0.4))
+                            ProgressView().tint(.white.opacity(0.5))
+                            Text(mesh.isStreaming(p) ? "decoding…" : "connected — waiting for video")
+                                .font(.caption2)
+                        }.foregroundStyle(.white.opacity(0.5))
                     )
             }
 
@@ -129,8 +130,13 @@ struct VideoWallView: View {
 
     private var bottomBar: some View {
         HStack {
-            Label("Hold a tile to talk", systemImage: "mic.fill")
-                .font(.caption).foregroundStyle(.white.opacity(0.6))
+            VStack(alignment: .leading, spacing: 2) {
+                Label("Hold a tile to talk", systemImage: "mic.fill")
+                    .font(.caption).foregroundStyle(.white.opacity(0.6))
+                Text("sent \(mesh.framesSent) · received \(mesh.framesReceived)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.35))
+            }
             Spacer()
             Button { enterStealth() } label: {
                 Label("Stealth", systemImage: "moon.fill")

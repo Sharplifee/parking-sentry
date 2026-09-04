@@ -12,8 +12,9 @@ final class AlertManager {
     private let globalCooldown: TimeInterval = 4
 
     private init() {
-        try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.duckOthers])
-        try? AVAudioSession.sharedInstance().setActive(true)
+        // Deliberately does NOT set a category: a .playback category here
+        // silently dropped the microphone, which killed sound metering and the
+        // intercom the moment any alert fired.
     }
 
     func requestNotificationPermission() {
@@ -70,6 +71,7 @@ final class AlertManager {
     // MARK: Siren
 
     func playSiren() {
+        Task { @MainActor in AudioSessionCoordinator.shared.prepareForAlertPlayback() }
         if player == nil { player = try? AVAudioPlayer(data: Self.sirenWAV()) }
         guard let player else { return }
         player.numberOfLoops = 3

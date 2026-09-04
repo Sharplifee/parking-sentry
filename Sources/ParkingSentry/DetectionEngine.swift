@@ -107,9 +107,7 @@ final class DetectionEngine: NSObject, ObservableObject {
             DispatchQueue.main.async {
                 MeshClient.shared.register(hasLiDAR: self.depthAvailable, hasTrueDepth: self.depthAvailable)
                 self.startHeartbeat()
-                // Make this device visible to the others so a controller can
-                // watch its camera and arm or disarm it.
-                PeerMesh.shared.startBroadcasting()
+                // Link already runs from launch; nothing to start here.
             }
             DispatchQueue.main.async {
                 self.isRunning = true
@@ -129,10 +127,9 @@ final class DetectionEngine: NSObject, ObservableObject {
             // Leave the capture session running so the preview stays up; only
             // detection, alerting and the peer broadcast stop.
             self.audio.stop()
-            DispatchQueue.main.async {
-                self.stopHeartbeat()
-                PeerMesh.shared.stop()
-            }
+            // Keep the peer link up after disarming so the device stays
+            // watchable and can be re-armed remotely.
+            DispatchQueue.main.async { self.stopHeartbeat() }
             DispatchQueue.main.async {
                 self.isRunning = false
                 self.isArmed = false
@@ -281,13 +278,15 @@ final class DetectionEngine: NSObject, ObservableObject {
                                 bufferWidth: CVPixelBufferGetWidth(pixelBuffer),
                                 bufferHeight: CVPixelBufferGetHeight(pixelBuffer))
 
-        // Idle: the preview layer is drawing these frames itself, so do nothing
-        // more with them. No gate, no Vision, no radio.
-        guard isRunning else { return }
-
-        // Hand the peer link a frame; it throttles and downscales internally,
-        // so detection keeps the full-resolution buffer.
+        // Stream to any connected device whether or not detection is armed.
+        // Watching a camera and arming it are different things: gating video on
+        // "armed" meant two paired devices saw each other and no picture.
+        // PeerMesh throttles and downscales internally, so detection still gets
+        // the full-resolution buffer.
         PeerMesh.shared.offer(frame: pixelBuffer, status: liveStatusLine())
+
+        // Idle: preview and streaming only. No gate, no Vision.
+        guard isRunning else { return }
 
         let motion = gate.process(pixelBuffer: pixelBuffer)
         DispatchQueue.main.async {

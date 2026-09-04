@@ -4,157 +4,191 @@ import AVFoundation
 import UIKit
 import Combine
 
-/// Device-to-device connection with no server, no account and no third-party
-/// service in the path. Devices find each other over Wi-Fi (or peer-to-peer
-/// Wi-Fi / Bluetooth when there is no network) and stream directly.
+/// Device-to-device link with no server, no account and no third-party service.
+/// Devices find each other over Wi-Fi, or peer-to-peer Wi-Fi and Bluetooth when
+/// there is no network, and stream directly to each other.
 ///
-/// This deliberately replaces the hosted-SFU approach: routing your cameras
-/// through an outside video service meant another account, another set of keys,
-/// and your footage leaving your own devices. Nothing here leaves the room.
+/// Three things this got wrong the first time, all fixed here:
+///  1. Video was gated on the detector being *armed*, so paired devices found
+///     each other and showed nothing.
+///  2. Discovery only ran once a device armed or opened the wall, so a device
+///     was often not reachable when you went looking for it.
+///  3. Both sides invited each other, which tears a session down mid-handshake.
 @MainActor
 final class PeerMesh: NSObject, ObservableObject {
 
     static let shared = PeerMesh()
 
-    /// Max 8 chars, lowercase, no spaces — Bonjour service type rules.
+    /// Bonjour service type — must match the Info.plist NSBonjourServices entries.
     private static let service = "msentry"
 
     @Published private(set) var peers: [MCPeerID] = []
     @Published private(set) var frames: [MCPeerID: UIImage] = [:]
     @Published private(set) var statusLines: [MCPeerID: String] = [:]
-    @Published private(set) var isBroadcasting = false
-    @Published private(set) var isWatching = false
+    @Published private(set) var lastFrameAt: [MCPeerID: Date] = [:]
+    @Published private(set) var running = false
+    @Published private(set) var framesSent = 0
+    @Published private(set) var framesReceived = 0
     @Published var talkingTo: MCPeerID?
+    /// Stop putting this device's own camera on the wire without stopping detection.
+    @Published var sharesCamera = true
 
-    private lazy var peerID = MCPeerID(displayName: String(MeshClient.shared.deviceName.prefix(63)))
+    private lazy var peerID: MCPeerID = {
+        let raw = MeshClient.shared.deviceName
+        let name = raw.isEmpty ? UIDevice.current.name : raw
+        return MCPeerID(displayName: String(name.prefix(63)))
+    }()
+
     private lazy var session: MCSession = {
         let s = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .required)
         s.delegate = self
         return s
     }()
+
     private var advertiser: MCNearbyServiceAdvertiser?
     private var browser: MCNearbyServiceBrowser?
 
-    // Video send throttle
+    // Video pacing
     private var lastFrameSent = Date.distantPast
     private let frameInterval: TimeInterval = 1.0 / 12.0
+    private var inFlight = false
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+    private let encodeQueue = DispatchQueue(label: "peermesh.encode", qos: .userInitiated)
 
-    // Audio for push-to-talk
-    private let engine = AVAudioEngine()
-    private var player: AVAudioPlayerNode?
+    // Two audio engines on purpose. Sharing one meant stopping the mic after a
+    // push-to-talk also tore down playback, so the next incoming burst was silent.
+    private let micEngine = AVAudioEngine()
+    private let playbackEngine = AVAudioEngine()
+    private var playerNode: AVAudioPlayerNode?
     private var playbackFormat: AVAudioFormat?
     private var micRunning = false
 
-    // MARK: Roles
+    // MARK: Lifecycle
 
-    /// A detector node: announce yourself and accept watchers.
-    func startBroadcasting() {
-        guard !isBroadcasting else { return }
+    /// Be findable and look for others. Safe to call repeatedly.
+    func start() {
+        guard !running else { return }
+
         let adv = MCNearbyServiceAdvertiser(peer: peerID,
-                                            discoveryInfo: ["role": "detector"],
+                                            discoveryInfo: ["app": "motionsentry"],
                                             serviceType: Self.service)
         adv.delegate = self
         adv.startAdvertisingPeer()
         advertiser = adv
-        isBroadcasting = true
-        startBrowsing()          // so two detectors can also see each other
-    }
 
-    /// A controller: look for nodes to watch.
-    func startBrowsing() {
-        guard browser == nil else { return }
         let b = MCNearbyServiceBrowser(peer: peerID, serviceType: Self.service)
         b.delegate = self
         b.startBrowsingForPeers()
         browser = b
-        isWatching = true
+
+        running = true
     }
 
     func stop() {
         advertiser?.stopAdvertisingPeer(); advertiser = nil
         browser?.stopBrowsingForPeers(); browser = nil
         session.disconnect()
-        isBroadcasting = false
-        isWatching = false
+        running = false
         peers = []
         frames = [:]
-        stopMic()
+        endTalking()
+    }
+
+    /// Connected is not the same as streaming; the wall needs to tell them apart.
+    func isStreaming(_ peer: MCPeerID) -> Bool {
+        guard let t = lastFrameAt[peer] else { return false }
+        return Date().timeIntervalSince(t) < 3
     }
 
     // MARK: Outbound video
 
-    /// Called by the detection engine on every frame it processes. Throttled and
-    /// downscaled here rather than at the camera, so detection keeps full
-    /// resolution while the wire gets something a phone can actually decode.
     nonisolated func offer(frame pixelBuffer: CVPixelBuffer, status: String) {
         Task { @MainActor in self.sendFrame(pixelBuffer, status: status) }
     }
 
     private func sendFrame(_ pixelBuffer: CVPixelBuffer, status: String) {
-        guard isBroadcasting, !session.connectedPeers.isEmpty else { return }
+        guard sharesCamera, !session.connectedPeers.isEmpty else { return }
         let now = Date()
         guard now.timeIntervalSince(lastFrameSent) >= frameInterval else { return }
+        // Never queue a second encode behind a slow one — dropping a frame beats
+        // building a backlog that puts the picture seconds behind reality.
+        guard !inFlight else { return }
         lastFrameSent = now
+        inFlight = true
 
+        let targets = session.connectedPeers
         let ci = CIImage(cvPixelBuffer: pixelBuffer)
-        let targetWidth: CGFloat = 640
-        let scale = min(1, targetWidth / ci.extent.width)
-        let small = ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        guard let cg = ciContext.createCGImage(small, from: small.extent),
-              let jpeg = UIImage(cgImage: cg).jpegData(compressionQuality: 0.4) else { return }
+        let ctx = ciContext
 
-        var payload = Data([Packet.video.rawValue])
-        let statusData = Data(status.prefix(120).utf8)
-        payload.append(UInt8(statusData.count))
-        payload.append(statusData)
-        payload.append(jpeg)
-        // Unreliable: a dropped frame is better than a growing backlog.
-        try? session.send(payload, toPeers: session.connectedPeers, with: .unreliable)
+        encodeQueue.async { [weak self] in
+            var payload: Data?
+            // 480 px wide keeps a frame inside Multipeer's datagram limit; larger
+            // frames were silently dropped on the unreliable path.
+            let scale = min(1, 480 / ci.extent.width)
+            let small = ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            if let cg = ctx.createCGImage(small, from: small.extent),
+               let jpeg = UIImage(cgImage: cg).jpegData(compressionQuality: 0.35) {
+                var p = Data([Packet.video.rawValue])
+                let statusData = Data(status.prefix(100).utf8)
+                p.append(UInt8(statusData.count))
+                p.append(statusData)
+                p.append(jpeg)
+                payload = p
+            }
+            Task { @MainActor in
+                guard let self else { return }
+                self.inFlight = false
+                guard let payload else { return }
+                let live = targets.filter { self.session.connectedPeers.contains($0) }
+                guard !live.isEmpty else { return }
+                do {
+                    try self.session.send(payload, toPeers: live, with: .unreliable)
+                    self.framesSent += 1
+                } catch {
+                    print("peer send failed: \(error.localizedDescription)")
+                }
+            }
+        }
     }
 
     // MARK: Push-to-talk
 
     func beginTalking(to peer: MCPeerID) {
         talkingTo = peer
+        AudioSessionCoordinator.shared.beginIntercom()
         startMic(to: [peer])
     }
 
     func endTalking() {
         talkingTo = nil
         stopMic()
+        AudioSessionCoordinator.shared.endIntercom()
     }
 
     private func startMic(to targets: [MCPeerID]) {
         guard !micRunning else { return }
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playAndRecord, mode: .voiceChat,
-                                 options: [.defaultToSpeaker, .allowBluetooth])
-        try? session.setActive(true)
-
-        let input = engine.inputNode
+        let input = micEngine.inputNode
         let format = input.outputFormat(forBus: 0)
+        guard format.sampleRate > 0 else { return }
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buf, _ in
             guard let self, let chan = buf.floatChannelData?[0] else { return }
-            // Downconvert to 16-bit mono; float PCM is four times the bytes for
-            // no audible gain over a walkie-talkie link.
             let n = Int(buf.frameLength)
+            guard n > 0 else { return }
             var pcm = Data(capacity: n * 2 + 1)
             pcm.append(Packet.audio.rawValue)
             for i in 0..<n {
                 let v = Int16(max(-1, min(1, chan[i])) * 32000)
                 withUnsafeBytes(of: v.littleEndian) { pcm.append(contentsOf: $0) }
             }
-            let rate = format.sampleRate
-            Task { @MainActor in self.sendAudio(pcm, rate: rate, to: targets) }
+            Task { @MainActor in self.sendAudio(pcm, to: targets) }
         }
-        engine.prepare()
-        try? engine.start()
-        micRunning = true
+        micEngine.prepare()
+        do { try micEngine.start(); micRunning = true }
+        catch { print("mic start failed: \(error.localizedDescription)") }
     }
 
-    private func sendAudio(_ data: Data, rate: Double, to targets: [MCPeerID]) {
+    private func sendAudio(_ data: Data, to targets: [MCPeerID]) {
         let live = targets.filter { session.connectedPeers.contains($0) }
         guard !live.isEmpty else { return }
         try? session.send(data, toPeers: live, with: .unreliable)
@@ -162,36 +196,37 @@ final class PeerMesh: NSObject, ObservableObject {
 
     private func stopMic() {
         guard micRunning else { return }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        micEngine.inputNode.removeTap(onBus: 0)
+        micEngine.stop()
         micRunning = false
     }
 
     private func play(_ pcm: Data) {
-        // Lazily stand up a playback graph the first time audio arrives.
-        if player == nil {
-            let fmt = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 44100,
-                                    channels: 1, interleaved: true)
-            guard let fmt else { return }
+        if playerNode == nil {
+            guard let fmt = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 44100,
+                                          channels: 1, interleaved: true) else { return }
             let node = AVAudioPlayerNode()
-            engine.attach(node)
-            engine.connect(node, to: engine.mainMixerNode, format: fmt)
-            try? engine.start()
+            playbackEngine.attach(node)
+            playbackEngine.connect(node, to: playbackEngine.mainMixerNode, format: fmt)
+            playbackEngine.prepare()
+            do { try playbackEngine.start() } catch {
+                print("playback start failed: \(error.localizedDescription)"); return
+            }
             node.play()
-            player = node
+            playerNode = node
             playbackFormat = fmt
         }
-        guard let player, let fmt = playbackFormat else { return }
-        let frames = AVAudioFrameCount(pcm.count / 2)
-        guard frames > 0,
-              let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: frames) else { return }
-        buf.frameLength = frames
+        guard let playerNode, let fmt = playbackFormat else { return }
+        let count = AVAudioFrameCount(pcm.count / 2)
+        guard count > 0,
+              let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: count) else { return }
+        buf.frameLength = count
         pcm.withUnsafeBytes { raw in
             if let src = raw.baseAddress, let dst = buf.int16ChannelData?[0] {
-                memcpy(dst, src, Int(frames) * 2)
+                memcpy(dst, src, Int(count) * 2)
             }
         }
-        player.scheduleBuffer(buf, completionHandler: nil)
+        playerNode.scheduleBuffer(buf, completionHandler: nil)
     }
 
     // MARK: Remote control
@@ -202,9 +237,7 @@ final class PeerMesh: NSObject, ObservableObject {
         try? session.send(d, toPeers: [peer], with: .reliable)
     }
 
-    enum Packet: UInt8 {
-        case video = 1, audio = 2, command = 3
-    }
+    enum Packet: UInt8 { case video = 1, audio = 2, command = 3 }
 }
 
 // MARK: - Session
@@ -213,26 +246,32 @@ extension PeerMesh: MCSessionDelegate {
     nonisolated func session(_ s: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
         Task { @MainActor in
             self.peers = s.connectedPeers
-            if state != .connected { self.frames[peerID] = nil }
+            if state != .connected {
+                self.frames[peerID] = nil
+                self.lastFrameAt[peerID] = nil
+            }
         }
     }
 
     nonisolated func session(_ s: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         guard let kind = data.first.flatMap(Packet.init(rawValue:)), data.count > 1 else { return }
-        let body = data.dropFirst()
+        // Copy rather than slice: a Data slice keeps its parent's indices, which
+        // makes every subsequent offset arithmetic quietly wrong.
+        let body = Data(data.dropFirst())
         switch kind {
         case .video:
-            guard let len = body.first, body.count > 1 + Int(len) else { return }
-            let statusBytes = body.dropFirst().prefix(Int(len))
-            let jpeg = body.dropFirst(1 + Int(len))
-            let status = String(decoding: statusBytes, as: UTF8.self)
-            guard let img = UIImage(data: Data(jpeg)) else { return }
+            guard let len = body.first.map(Int.init), body.count > 1 + len else { return }
+            let status = String(decoding: body[1..<(1 + len)], as: UTF8.self)
+            let jpeg = Data(body[(1 + len)...])
+            guard let img = UIImage(data: jpeg) else { return }
             Task { @MainActor in
                 self.frames[peerID] = img
                 self.statusLines[peerID] = status
+                self.lastFrameAt[peerID] = Date()
+                self.framesReceived += 1
             }
         case .audio:
-            Task { @MainActor in self.play(Data(body)) }
+            Task { @MainActor in self.play(body) }
         case .command:
             let cmd = String(decoding: body, as: UTF8.self)
             Task { @MainActor in
@@ -245,9 +284,9 @@ extension PeerMesh: MCSessionDelegate {
         }
     }
 
-    nonisolated func session(_ s: MCSession, didReceive stream: InputStream, withName streamName: String, fromPeer peerID: MCPeerID) {}
-    nonisolated func session(_ s: MCSession, didStartReceivingResourceWithName name: String, fromPeer peerID: MCPeerID, with progress: Progress) {}
-    nonisolated func session(_ s: MCSession, didFinishReceivingResourceWithName name: String, fromPeer peerID: MCPeerID, at localURL: URL?, withError error: Error?) {}
+    nonisolated func session(_ s: MCSession, didReceive stream: InputStream, withName n: String, fromPeer p: MCPeerID) {}
+    nonisolated func session(_ s: MCSession, didStartReceivingResourceWithName n: String, fromPeer p: MCPeerID, with progress: Progress) {}
+    nonisolated func session(_ s: MCSession, didFinishReceivingResourceWithName n: String, fromPeer p: MCPeerID, at url: URL?, withError e: Error?) {}
 }
 
 extension PeerMesh: MCNearbyServiceAdvertiserDelegate {
@@ -255,9 +294,11 @@ extension PeerMesh: MCNearbyServiceAdvertiserDelegate {
                                 didReceiveInvitationFromPeer peerID: MCPeerID,
                                 withContext context: Data?,
                                 invitationHandler: @escaping (Bool, MCSession?) -> Void) {
-        // One owner's own devices — accept. The session is encryption-required
-        // and the service type is private to this app.
         Task { @MainActor in invitationHandler(true, self.session) }
+    }
+
+    nonisolated func advertiser(_ a: MCNearbyServiceAdvertiser, didNotStartAdvertisingPeer error: Error) {
+        print("advertise failed: \(error.localizedDescription)")
     }
 }
 
@@ -265,13 +306,22 @@ extension PeerMesh: MCNearbyServiceBrowserDelegate {
     nonisolated func browser(_ b: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID,
                              withDiscoveryInfo info: [String: String]?) {
         Task { @MainActor in
-            b.invitePeer(peerID, to: self.session, withContext: nil, timeout: 15)
+            guard !self.session.connectedPeers.contains(peerID) else { return }
+            // Both sides browse, so both would invite and one session gets torn
+            // down mid-handshake. Lower name invites; the other waits.
+            guard self.peerID.displayName < peerID.displayName else { return }
+            b.invitePeer(peerID, to: self.session, withContext: nil, timeout: 20)
         }
     }
+
     nonisolated func browser(_ b: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {
         Task { @MainActor in
             self.peers = self.session.connectedPeers
             self.frames[peerID] = nil
         }
+    }
+
+    nonisolated func browser(_ b: MCNearbyServiceBrowser, didNotStartBrowsingForPeers error: Error) {
+        print("browse failed: \(error.localizedDescription)")
     }
 }

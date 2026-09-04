@@ -34,10 +34,9 @@ final class AudioMonitor {
 
     func start() throws {
         guard !running else { return }
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .measurement,
-                                options: [.mixWithOthers, .defaultToSpeaker, .allowBluetooth])
-        try session.setActive(true)
+        // The session is owned centrally; configuring it here used to clobber
+        // the intercom's voice-chat mode and vice versa.
+        Task { @MainActor in AudioSessionCoordinator.shared.beginMetering() }
 
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
@@ -51,6 +50,7 @@ final class AudioMonitor {
     }
 
     func stop() {
+        Task { @MainActor in AudioSessionCoordinator.shared.endMetering() }
         guard running else { return }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
