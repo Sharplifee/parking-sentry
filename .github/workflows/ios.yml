@@ -165,6 +165,34 @@ jobs:
             echo "altool exited $STATUS - asking App Store Connect what it actually has"
           fi
           python3 scripts/verify_upload.py "$ASC_APP_ID" "$BUILD_NUMBER"
+          # VALID is not the same as installable: a build with no compliance
+          # answer stays out of testers' hands. Assert it actually entered beta
+          # testing before calling this a release.
+          python3 - <<'ASSERT'
+          import json, os, time, urllib.request, jwt
+          kid, iss = os.environ["ASC_KEY_ID"], os.environ["ASC_ISSUER_ID"]
+          key = open(os.path.expanduser(f"~/private_keys/AuthKey_{kid}.p8")).read()
+          def tok():
+              n = int(time.time())
+              return jwt.encode({"iss": iss, "iat": n, "exp": n+900, "aud": "appstoreconnect-v1"},
+                                key, algorithm="ES256", headers={"kid": kid})
+          def get(p):
+              r = urllib.request.Request("https://api.appstoreconnect.apple.com"+p,
+                                         headers={"Authorization": "Bearer "+tok()})
+              return json.loads(urllib.request.urlopen(r).read())
+          APP, V = os.environ["ASC_APP_ID"], os.environ["BUILD_NUMBER"]
+          for _ in range(20):
+              d = get(f"/v1/builds?filter[app]={APP}&filter[version]={V}")["data"]
+              if d:
+                  bid = d[0]["id"]
+                  st = get(f"/v1/builds/{bid}/buildBetaDetail")["data"]["attributes"]["internalBuildState"]
+                  print("internalBuildState =", st)
+                  if st == "IN_BETA_TESTING":
+                      print(f"== build {V} is live in TestFlight ==")
+                      raise SystemExit(0)
+              time.sleep(30)
+          raise SystemExit(f"build {V} never reached IN_BETA_TESTING")
+          ASSERT
 
       - name: Build log on failure
         if: failure()
