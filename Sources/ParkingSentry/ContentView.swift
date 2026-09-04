@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var engine: DetectionEngine
     @EnvironmentObject var settings: Settings
+    @ObservedObject private var peers = PeerMesh.shared
     @State private var showSettings = false
     @State private var showLog = false
     @State private var showMesh = false
@@ -16,6 +17,14 @@ struct ContentView: View {
 
             CameraPreview(session: engine.session, overlays: engine.overlays)
                 .ignoresSafeArea()
+
+            if !engine.previewLive {
+                VStack(spacing: 10) {
+                    ProgressView().tint(.white)
+                    Text("Starting camera…")
+                        .font(.caption).foregroundStyle(.white.opacity(0.6))
+                }
+            }
 
             VStack {
                 telemetry
@@ -39,6 +48,7 @@ struct ContentView: View {
                     .transition(.opacity)
             }
         }
+        .onAppear { engine.startPreview() }
         .statusBarHidden(stealth)
         .persistentSystemOverlays(stealth ? .hidden : .automatic)
         .sheet(isPresented: $showSettings) {
@@ -65,90 +75,115 @@ struct ContentView: View {
     }
 
     private var telemetry: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
                 Circle()
                     .fill(engine.isArmed ? Color.red : (engine.isRunning ? Color.yellow : Color.gray))
-                    .frame(width: 12, height: 12)
+                    .frame(width: 10, height: 10)
                 Text(engine.isRunning
                      ? (engine.isArmed ? engine.status : "Arming in \(engine.armCountdown)s")
-                     : "Idle")
-                    .font(.headline)
-                Spacer()
+                     : "Ready")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Spacer(minLength: 6)
                 if engine.depthAvailable {
-                    Label("LiDAR", systemImage: "sensor.tag.radiowaves.forward")
-                        .font(.caption)
+                    Image(systemName: "sensor.tag.radiowaves.forward").font(.caption2)
+                }
+                if !peers.peers.isEmpty {
+                    Label("\(peers.peers.count)", systemImage: "link")
+                        .font(.caption2)
                 }
             }
-            HStack(spacing: 14) {
-                Text(String(format: "motion %.3f", engine.motionScore))
-                Text(String(format: "shadow-rejected %.0f%%", engine.shadowRejectFraction * 100))
-                Text(String(format: "%.0f Hz", engine.visionHz))
-                Text("range \(engine.rangeSourceLabel)")
-                Text(engine.modelStatus)
-                Text(String(format: "%.0f dB (amb %.0f)", engine.soundLevelDB, engine.ambientDB))
+
+            // Two short rows rather than one long one: six fields on a single
+            // line wrapped and overlapped on a phone.
+            HStack(spacing: 12) {
+                stat("motion", String(format: "%.3f", engine.motionScore))
+                stat("shadow", String(format: "%.0f%%", engine.shadowRejectFraction * 100))
+                stat("rate", String(format: "%.0fHz", engine.visionHz))
+                Spacer(minLength: 0)
             }
-            .font(.system(size: 11, design: .monospaced))
-            .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                stat("sound", String(format: "%.0fdB", engine.soundLevelDB))
+                stat("range", engine.rangeSourceLabel)
+                stat("model", engine.modelStatus.hasPrefix("model failed") ? "failed" : engine.modelStatus)
+                Spacer(minLength: 0)
+            }
         }
         .padding(10)
         .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
         .foregroundStyle(.white)
     }
 
+    private func stat(_ label: String, _ value: String) -> some View {
+        HStack(spacing: 3) {
+            Text(label).foregroundStyle(.white.opacity(0.45))
+            Text(value).foregroundStyle(.white.opacity(0.9))
+        }
+        .font(.system(size: 11, weight: .medium, design: .monospaced))
+        .lineLimit(1)
+        .fixedSize()
+    }
+
     private var controls: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             Button {
                 engine.isRunning ? engine.stop() : engine.start()
             } label: {
                 Label(engine.isRunning ? "Stop" : "Arm",
                       systemImage: engine.isRunning ? "stop.fill" : "shield.lefthalf.filled")
+                    .font(.headline)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
+                    .padding(.vertical, 14)
             }
             .background(engine.isRunning ? Color.red : Color.green, in: Capsule())
             .foregroundStyle(.white)
 
-            Button { engine.relearnBackground() } label: {
-                Image(systemName: "arrow.clockwise").padding(12)
-            }
-            .background(.ultraThinMaterial, in: Circle())
+            circleButton("rectangle.on.rectangle") { showWall = true }
+            circleButton("moon.fill") { enterStealth() }
 
-            Button { showLog = true } label: {
-                Image(systemName: "list.bullet.rectangle").padding(12)
+            Menu {
+                Button { engine.relearnBackground() } label: {
+                    Label("Relearn background", systemImage: "arrow.clockwise")
+                }
+                Button { showLog = true } label: {
+                    Label("Detections (\(engine.events.count))", systemImage: "list.bullet.rectangle")
+                }
+                Button { showMesh = true } label: {
+                    Label("Devices", systemImage: "square.grid.2x2")
+                }
+                Button { showSettings = true } label: {
+                    Label("Settings", systemImage: "slider.horizontal.3")
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.title3)
+                    .frame(width: 46, height: 46)
+                    .background(.ultraThinMaterial, in: Circle())
                     .overlay(alignment: .topTrailing) {
                         if !engine.events.isEmpty {
                             Text("\(engine.events.count)")
-                                .font(.caption2).padding(4)
+                                .font(.caption2.bold())
+                                .padding(5)
                                 .background(Color.red, in: Circle())
                                 .foregroundStyle(.white)
-                                .offset(x: 6, y: -6)
+                                .offset(x: 4, y: -4)
                         }
                     }
             }
-            .background(.ultraThinMaterial, in: Circle())
-
-            Button { showWall = true } label: {
-                Image(systemName: "rectangle.on.rectangle").padding(12)
-            }
-            .background(.ultraThinMaterial, in: Circle())
-
-            Button { enterStealth() } label: {
-                Image(systemName: "moon.fill").padding(12)
-            }
-            .background(.ultraThinMaterial, in: Circle())
-
-            Button { showMesh = true } label: {
-                Image(systemName: "square.grid.2x2").padding(12)
-            }
-            .background(.ultraThinMaterial, in: Circle())
-
-            Button { showSettings = true } label: {
-                Image(systemName: "slider.horizontal.3").padding(12)
-            }
-            .background(.ultraThinMaterial, in: Circle())
         }
         .foregroundStyle(.white)
+    }
+
+    private func circleButton(_ icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.title3)
+                .frame(width: 46, height: 46)
+                .background(.ultraThinMaterial, in: Circle())
+        }
     }
 }
 

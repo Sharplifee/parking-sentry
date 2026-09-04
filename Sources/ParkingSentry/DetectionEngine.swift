@@ -40,6 +40,7 @@ final class DetectionEngine: NSObject, ObservableObject {
     @Published var depthAvailable = false
     @Published var visionHz: Double = 0
     @Published var modelStatus = "loading"
+    @Published var previewLive = false
     @Published var soundLevelDB: Float = 0
     @Published var ambientDB: Float = 0
 
@@ -77,9 +78,25 @@ final class DetectionEngine: NSObject, ObservableObject {
     override init() {
         super.init()
         DetectionEngine.shared = self
+        modelStatus = detector.modelLoaded
+            ? "YOLOv3-Tiny"
+            : "model failed: " + (detector.modelLoadError ?? "unknown")
     }
 
     // MARK: Lifecycle
+
+    /// Bring the camera up without arming anything. Without this the screen is
+    /// simply black until you tap Arm, which reads as a broken app and gives you
+    /// no way to frame the shot before starting.
+    func startPreview() {
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            guard !self.session.isRunning else { return }
+            if self.session.inputs.isEmpty { self.configure() }
+            self.session.startRunning()
+            DispatchQueue.main.async { self.previewLive = true }
+        }
+    }
 
     func start() {
         sessionQueue.async { [weak self] in
@@ -109,7 +126,8 @@ final class DetectionEngine: NSObject, ObservableObject {
     func stop() {
         sessionQueue.async { [weak self] in
             guard let self else { return }
-            if self.session.isRunning { self.session.stopRunning() }
+            // Leave the capture session running so the preview stays up; only
+            // detection, alerting and the peer broadcast stop.
             self.audio.stop()
             DispatchQueue.main.async {
                 self.stopHeartbeat()
@@ -262,6 +280,10 @@ final class DetectionEngine: NSObject, ObservableObject {
         ranger.updateIntrinsics(from: sampleBuffer,
                                 bufferWidth: CVPixelBufferGetWidth(pixelBuffer),
                                 bufferHeight: CVPixelBufferGetHeight(pixelBuffer))
+
+        // Idle: the preview layer is drawing these frames itself, so do nothing
+        // more with them. No gate, no Vision, no radio.
+        guard isRunning else { return }
 
         // Hand the peer link a frame; it throttles and downscales internally,
         // so detection keeps the full-resolution buffer.
