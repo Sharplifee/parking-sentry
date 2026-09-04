@@ -23,6 +23,10 @@ struct BoxOverlay: Identifiable {
 
 final class DetectionEngine: NSObject, ObservableObject {
 
+    /// Set on init so a remote arm/disarm arriving over the peer link has
+    /// something to act on. One engine per app, so this is safe.
+    static private(set) weak var shared: DetectionEngine?
+
     // MARK: Published state
     @Published var isRunning = false
     @Published var isArmed = false
@@ -70,6 +74,11 @@ final class DetectionEngine: NSObject, ObservableObject {
     private let minVisionInterval: TimeInterval = 0.12   // ~8 Hz ceiling
     private let forcedVisionInterval: TimeInterval = 2.0 // catch slow creep the gate missed
 
+    override init() {
+        super.init()
+        DetectionEngine.shared = self
+    }
+
     // MARK: Lifecycle
 
     func start() {
@@ -81,6 +90,9 @@ final class DetectionEngine: NSObject, ObservableObject {
             DispatchQueue.main.async {
                 MeshClient.shared.register(hasLiDAR: self.depthAvailable, hasTrueDepth: self.depthAvailable)
                 self.startHeartbeat()
+                // Make this device visible to the others so a controller can
+                // watch its camera and arm or disarm it.
+                PeerMesh.shared.startBroadcasting()
             }
             DispatchQueue.main.async {
                 self.isRunning = true
@@ -99,7 +111,10 @@ final class DetectionEngine: NSObject, ObservableObject {
             guard let self else { return }
             if self.session.isRunning { self.session.stopRunning() }
             self.audio.stop()
-            DispatchQueue.main.async { self.stopHeartbeat() }
+            DispatchQueue.main.async {
+                self.stopHeartbeat()
+                PeerMesh.shared.stop()
+            }
             DispatchQueue.main.async {
                 self.isRunning = false
                 self.isArmed = false
@@ -247,6 +262,10 @@ final class DetectionEngine: NSObject, ObservableObject {
         ranger.updateIntrinsics(from: sampleBuffer,
                                 bufferWidth: CVPixelBufferGetWidth(pixelBuffer),
                                 bufferHeight: CVPixelBufferGetHeight(pixelBuffer))
+
+        // Hand the peer link a frame; it throttles and downscales internally,
+        // so detection keeps the full-resolution buffer.
+        PeerMesh.shared.offer(frame: pixelBuffer, status: liveStatusLine())
 
         let motion = gate.process(pixelBuffer: pixelBuffer)
         DispatchQueue.main.async {
@@ -400,6 +419,20 @@ final class DetectionEngine: NSObject, ObservableObject {
         heartbeatTimer = nil
         MeshClient.shared.heartbeat(armed: false, soundDB: 0, ambientDB: 0)
         MeshClient.shared.stopTimers()
+    }
+
+    /// One line describing what this node is seeing right now, shown under its
+    /// tile on the controller so you can read the wall without tapping in.
+    private func liveStatusLine() -> String {
+        if let t = tracker.active.first(where: { $0.misses == 0 && $0.hits >= settings.confirmHits }) {
+            var s = t.label.capitalized
+            if let r = t.smoothedRange { s += String(format: " %.0f m", r) }
+            if let mps = t.speed(horizontalFOVRadians: fovRadians), mps > 0.3 {
+                s += String(format: " · %.0f mph", mps * 2.23694)
+            }
+            return s
+        }
+        return isArmed ? String(format: "armed · %.0f dB", soundLevelDB) : "idle"
     }
 
     func clearEvents() { events.removeAll() }

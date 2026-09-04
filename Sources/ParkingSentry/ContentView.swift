@@ -6,6 +6,9 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var showLog = false
     @State private var showMesh = false
+    @State private var showWall = false
+    @State private var stealth = false
+    @State private var priorBrightness: CGFloat = UIScreen.main.brightness
 
     var body: some View {
         ZStack {
@@ -20,7 +23,24 @@ struct ContentView: View {
                 controls
             }
             .padding()
+
+            if stealth {
+                // Blacks out this device only. Detection, alerts and the peer
+                // link all keep running underneath.
+                Color.black.ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) { exitStealth() }
+                    .gesture(DragGesture(minimumDistance: 50).onEnded { _ in exitStealth() })
+                    .overlay(alignment: .bottom) {
+                        Text("double-tap to wake")
+                            .font(.caption2).foregroundStyle(.white.opacity(0.05))
+                            .padding(.bottom, 34)
+                    }
+                    .transition(.opacity)
+            }
         }
+        .statusBarHidden(stealth)
+        .persistentSystemOverlays(stealth ? .hidden : .automatic)
         .sheet(isPresented: $showSettings) {
             SettingsView().environmentObject(settings).environmentObject(engine)
         }
@@ -30,6 +50,18 @@ struct ContentView: View {
         .sheet(isPresented: $showMesh) {
             MeshView().environmentObject(engine)
         }
+        .fullScreenCover(isPresented: $showWall) { VideoWallView() }
+    }
+
+    private func enterStealth() {
+        priorBrightness = UIScreen.main.brightness
+        withAnimation(.easeInOut(duration: 0.45)) { stealth = true }
+        UIScreen.main.brightness = 0
+    }
+
+    private func exitStealth() {
+        UIScreen.main.brightness = priorBrightness
+        withAnimation(.easeInOut(duration: 0.25)) { stealth = false }
     }
 
     private var telemetry: some View {
@@ -93,6 +125,16 @@ struct ContentView: View {
                                 .offset(x: 6, y: -6)
                         }
                     }
+            }
+            .background(.ultraThinMaterial, in: Circle())
+
+            Button { showWall = true } label: {
+                Image(systemName: "rectangle.on.rectangle").padding(12)
+            }
+            .background(.ultraThinMaterial, in: Circle())
+
+            Button { enterStealth() } label: {
+                Image(systemName: "moon.fill").padding(12)
             }
             .background(.ultraThinMaterial, in: Circle())
 

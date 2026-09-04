@@ -22,6 +22,12 @@
   <key>UIStatusBarHidden</key><true/>
   <key>UIViewControllerBasedStatusBarAppearance</key><false/>
   <key>NSMicrophoneUsageDescription</key><string>MotionSentry measures sound level and uses a sudden noise as a detection trigger. Audio is not recorded.</string>
+  <key>NSLocalNetworkUsageDescription</key><string>MotionSentry connects your devices so you can watch and control one from another.</string>
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_msentry._tcp</string>
+    <string>_msentry._udp</string>
+  </array>
   <key>NSCameraUsageDescription</key><string>Parking Sentry watches the camera for people approaching. Video never leaves this device.</string>
   <key>UISupportedInterfaceOrientations</key>
   <array>
