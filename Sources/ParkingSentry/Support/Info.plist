@@ -12,6 +12,10 @@
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSRequiresIPhoneOS</key><true/>
+  <!-- iPadOS refuses camera access to apps sharing the screen in Split View or
+       Slide Over. Without this the iPad shows a black preview and reports it as
+       an interruption the user cannot act on. -->
+  <key>UIRequiresFullScreen</key><true/>
   <key>UIApplicationSupportsIndirectInputEvents</key><true/>
   <key>UILaunchScreen</key><dict/>
   <key>CFBundleIconName</key><string>AppIcon</string>

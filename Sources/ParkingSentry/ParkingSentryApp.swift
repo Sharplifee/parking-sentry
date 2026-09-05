@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import AVFoundation
 
 @main
 struct ParkingSentryApp: App {
@@ -9,6 +10,13 @@ struct ParkingSentryApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .onReceive(NotificationCenter.default.publisher(
+                    for: UIApplication.didBecomeActiveNotification)) { _ in
+                    // Re-try every time the app comes forward: after a trip to
+                    // Settings, after an interruption, after multitasking.
+                    engine.startPreview()
+                    PeerMesh.shared.start()
+                }
                 .environmentObject(settings)
                 .environmentObject(engine)
                 .preferredColorScheme(.dark)

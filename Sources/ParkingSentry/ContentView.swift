@@ -25,12 +25,16 @@ struct ContentView: View {
                     Text(problem)
                         .font(.callout).multilineTextAlignment(.center)
                         .padding(.horizontal, 36)
-                    Button("Open Settings") {
-                        if let u = URL(string: UIApplication.openSettingsURLString) {
-                            UIApplication.shared.open(u)
+                    HStack(spacing: 12) {
+                        Button("Try again") { engine.startPreview() }
+                            .buttonStyle(.bordered)
+                        Button("Open Settings") {
+                            if let u = URL(string: UIApplication.openSettingsURLString) {
+                                UIApplication.shared.open(u)
+                            }
                         }
+                        .buttonStyle(.borderedProminent)
                     }
-                    .buttonStyle(.borderedProminent)
                 }
                 .foregroundStyle(.white)
             } else if !engine.previewLive {

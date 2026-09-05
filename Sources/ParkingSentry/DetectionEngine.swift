@@ -69,6 +69,7 @@ final class DetectionEngine: NSObject, ObservableObject {
     private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var rotationObservation: NSKeyValueObservation?
     private var previewRotationObservation: NSKeyValueObservation?
+    private var sessionObservers: [NSObjectProtocol] = []
     /// The live preview layer, handed over by the view. The rotation coordinator
     /// needs it: built with nil, the preview connection is never rotated, so on
     /// iPad in landscape the picture and the detection buffers disagree and every
@@ -238,12 +239,6 @@ final class DetectionEngine: NSObject, ObservableObject {
     private func configure() {
         session.beginConfiguration()
 
-        // Walk down until something sticks: several iPads reject 4K, and an
-        // unsupported preset leaves the session running with no usable output.
-        let ladder: [AVCaptureSession.Preset] = settings.longRangeMode
-            ? [.hd4K3840x2160, .hd1920x1080, .hd1280x720, .high]
-            : [.hd1920x1080, .hd1280x720, .high]
-        session.sessionPreset = ladder.first { session.canSetSessionPreset($0) } ?? .high
 
         let position: AVCaptureDevice.Position = settings.useFrontCamera ? .front : .back
         let types: [AVCaptureDevice.DeviceType] = position == .back
@@ -277,6 +272,19 @@ final class DetectionEngine: NSObject, ObservableObject {
         }
         session.addInput(input)
         device = cam
+
+        // Preset is chosen HERE, after the input exists. Asked before, the
+        // session has no device to validate against and answers yes to almost
+        // anything — which is how an iPad ended up "running" at 4K it cannot
+        // actually deliver, showing a black frame with no error.
+        let ladder: [AVCaptureSession.Preset] = settings.longRangeMode
+            ? [.hd4K3840x2160, .hd1920x1080, .hd1280x720, .high]
+            : [.hd1920x1080, .hd1280x720, .high]
+        if let usable = ladder.first(where: { session.canSetSessionPreset($0) }) {
+            session.sessionPreset = usable
+        } else {
+            session.sessionPreset = .high
+        }
 
         videoOutput.videoSettings = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
@@ -314,6 +322,7 @@ final class DetectionEngine: NSObject, ObservableObject {
         }
 
         // Deliver upright buffers so Vision, the motion gate and the overlay all share one space.
+        DispatchQueue.main.async { self.observeSessionHealth() }
         rebuildRotationCoordinator()
 
         // Mirroring must be identical on the preview and on the frames Vision
@@ -343,6 +352,74 @@ final class DetectionEngine: NSObject, ObservableObject {
 
     /// Rebuilt whenever the device or the preview layer changes. Capture and
     /// preview get their own angles — they are not always the same value.
+    /// The camera can be taken away at any time — another app claims it, the
+    /// device is in Split View, a call arrives. None of that raises an error on
+    /// the session, so without these observers the app just shows black forever
+    /// and blames permissions.
+    private func observeSessionHealth() {
+        let center = NotificationCenter.default
+        sessionObservers.forEach { center.removeObserver($0) }
+        sessionObservers.removeAll()
+
+        sessionObservers.append(center.addObserver(
+            forName: AVCaptureSession.wasInterruptedNotification,
+            object: session, queue: .main) { [weak self] note in
+                guard let self else { return }
+                let raw = (note.userInfo?[AVCaptureSessionInterruptionReasonKey] as? Int) ?? -1
+                let reason = AVCaptureSession.InterruptionReason(rawValue: raw)
+                self.cameraProblem = Self.describe(reason)
+                self.previewLive = false
+        })
+
+        sessionObservers.append(center.addObserver(
+            forName: AVCaptureSession.interruptionEndedNotification,
+            object: session, queue: .main) { [weak self] _ in
+                guard let self else { return }
+                self.cameraProblem = nil
+                // The session does not always resume itself.
+                self.sessionQueue.async {
+                    if !self.session.isRunning { self.session.startRunning() }
+                    DispatchQueue.main.async { self.previewLive = self.session.isRunning }
+                }
+        })
+
+        sessionObservers.append(center.addObserver(
+            forName: AVCaptureSession.runtimeErrorNotification,
+            object: session, queue: .main) { [weak self] note in
+                guard let self else { return }
+                let err = note.userInfo?[AVCaptureSessionErrorKey] as? NSError
+                self.cameraProblem = "Camera stopped: \(err?.localizedDescription ?? "unknown error"). Reopening usually clears it."
+                self.previewLive = false
+                // Media-services-reset is recoverable by restarting the session.
+                self.sessionQueue.async {
+                    if !self.session.isRunning { self.session.startRunning() }
+                    DispatchQueue.main.async {
+                        if self.session.isRunning {
+                            self.previewLive = true
+                            self.cameraProblem = nil
+                        }
+                    }
+                }
+        })
+    }
+
+    private static func describe(_ reason: AVCaptureSession.InterruptionReason?) -> String {
+        switch reason {
+        case .videoDeviceNotAvailableWithMultipleForegroundApps:
+            return "iPadOS took the camera because MotionSentry is sharing the screen. Make it full screen — close Split View or Slide Over — and the picture returns."
+        case .videoDeviceInUseByAnotherClient:
+            return "Another app is using the camera. Close it and MotionSentry will pick the camera back up."
+        case .videoDeviceNotAvailableInBackground:
+            return "The camera pauses while MotionSentry is in the background."
+        case .audioDeviceInUseByAnotherClient:
+            return "Another app is using the microphone."
+        case .videoDeviceNotAvailableDueToSystemPressure:
+            return "The device is too hot or under heavy load, so the camera paused. It resumes once it cools."
+        default:
+            return "The camera was interrupted by the system."
+        }
+    }
+
     private func rebuildRotationCoordinator() {
         guard let cam = device else { return }
         let layer = previewLayer
