@@ -21,6 +21,8 @@ targets:
       - path: Sources/ParkingSentry
         excludes:
           - "Support/Info.plist"
+      - path: Sources/ParkingSentry/Support/PrivacyInfo.xcprivacy
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.connor.parkingsentry
