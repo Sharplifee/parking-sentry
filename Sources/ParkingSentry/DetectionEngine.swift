@@ -27,6 +27,15 @@ final class DetectionEngine: NSObject, ObservableObject {
     /// something to act on. One engine per app, so this is safe.
     static private(set) weak var shared: DetectionEngine?
 
+    /// The external-display view needs a concrete object to observe. The app
+    /// always creates exactly one engine at launch, so this resolves to it;
+    /// the fallback only exists so the type is non-optional.
+    @MainActor static var sharedOrPlaceholder: DetectionEngine {
+        if let s = shared { return s }
+        let made = DetectionEngine()
+        return made
+    }
+
     // MARK: Published state
     @Published var isRunning = false
     @Published var isArmed = false
@@ -58,6 +67,14 @@ final class DetectionEngine: NSObject, ObservableObject {
     private var device: AVCaptureDevice?
     private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var rotationObservation: NSKeyValueObservation?
+    private var previewRotationObservation: NSKeyValueObservation?
+    /// The live preview layer, handed over by the view. The rotation coordinator
+    /// needs it: built with nil, the preview connection is never rotated, so on
+    /// iPad in landscape the picture and the detection buffers disagree and every
+    /// overlay box lands in the wrong place.
+    weak var previewLayer: AVCaptureVideoPreviewLayer? {
+        didSet { sessionQueue.async { [weak self] in self?.rebuildRotationCoordinator() } }
+    }
 
     // MARK: Pipeline
     private let gate = MotionGate()
@@ -290,13 +307,16 @@ final class DetectionEngine: NSObject, ObservableObject {
         }
 
         // Deliver upright buffers so Vision, the motion gate and the overlay all share one space.
-        let coordinator = AVCaptureDevice.RotationCoordinator(device: cam, previewLayer: nil)
-        rotationCoordinator = coordinator
-        applyRotation(coordinator.videoRotationAngleForHorizonLevelCapture)
-        rotationObservation = coordinator.observe(\.videoRotationAngleForHorizonLevelCapture,
-                                                   options: [.new]) { [weak self] _, change in
-            guard let angle = change.newValue else { return }
-            self?.sessionQueue.async { self?.applyRotation(angle) }
+        rebuildRotationCoordinator()
+
+        // Mirroring must be identical on the preview and on the frames Vision
+        // sees, or the boxes are horizontally flipped on the front camera. Pin
+        // both to un-mirrored so the two spaces always agree.
+        for c in [videoOutput.connection(with: .video), previewLayer?.connection].compactMap({ $0 }) {
+            if c.isVideoMirroringSupported {
+                c.automaticallyAdjustsVideoMirroring = false
+                c.isVideoMirrored = false
+            }
         }
 
         try? cam.lockForConfiguration()
@@ -312,6 +332,34 @@ final class DetectionEngine: NSObject, ObservableObject {
             self.depthAvailable = haveDepth
             self.modelStatus = ml
         }
+    }
+
+    /// Rebuilt whenever the device or the preview layer changes. Capture and
+    /// preview get their own angles — they are not always the same value.
+    private func rebuildRotationCoordinator() {
+        guard let cam = device else { return }
+        let layer = previewLayer
+        let coordinator = AVCaptureDevice.RotationCoordinator(device: cam, previewLayer: layer)
+        rotationCoordinator = coordinator
+
+        applyRotation(coordinator.videoRotationAngleForHorizonLevelCapture)
+        applyPreviewRotation(coordinator.videoRotationAngleForHorizonLevelPreview)
+
+        rotationObservation = coordinator.observe(\.videoRotationAngleForHorizonLevelCapture,
+                                                   options: [.new]) { [weak self] _, change in
+            guard let angle = change.newValue else { return }
+            self?.sessionQueue.async { self?.applyRotation(angle) }
+        }
+        previewRotationObservation = coordinator.observe(\.videoRotationAngleForHorizonLevelPreview,
+                                                          options: [.new]) { [weak self] _, change in
+            guard let angle = change.newValue else { return }
+            DispatchQueue.main.async { self?.applyPreviewRotation(angle) }
+        }
+    }
+
+    private func applyPreviewRotation(_ angle: CGFloat) {
+        guard let c = previewLayer?.connection, c.isVideoRotationAngleSupported(angle) else { return }
+        c.videoRotationAngle = angle
     }
 
     private func applyRotation(_ angle: CGFloat) {
@@ -385,7 +433,14 @@ final class DetectionEngine: NSObject, ObservableObject {
                                       metrics: COCOClass.metrics(for: t.label,
                                                                  personHeight: settings.subjectHeightMeters))
             tracker.recordSample(range: est.meters, for: t)
-            if est.meters != nil { sourceLabel = est.source.rawValue }
+            if let r = est.meters {
+                sourceLabel = est.source.rawValue
+                let sz = ranger.size(box: t.box, rangeMeters: r, source: est.source,
+                                     metrics: COCOClass.metrics(for: t.label,
+                                                                personHeight: settings.subjectHeightMeters),
+                                     truncated: est.truncated)
+                tracker.recordSize(height: sz.heightMeters, width: sz.widthMeters, for: t)
+            }
         }
 
         let boxes = tracks.filter { $0.misses <= 2 }.map { t -> BoxOverlay in
@@ -393,6 +448,9 @@ final class DetectionEngine: NSObject, ObservableObject {
             var text = t.smoothedRange.map { String(format: "%@  %.0f m", name, $0) } ?? name
             if let mps = t.speed(horizontalFOVRadians: self.fovRadians), mps > 0.3 {
                 text += String(format: "  %.0f mph", mps * 2.23694)
+            }
+            if let h = t.measuredHeight {
+                text += String(format: "  %.1f m tall", h)
             }
             return BoxOverlay(id: t.id,
                               rect: t.box,
@@ -438,7 +496,8 @@ final class DetectionEngine: NSObject, ObservableObject {
             ? String(format: " · %.0f mph", mps! * 2.23694) : ""
         let approachText = (track.closingRate.map { $0 < -0.3 } ?? false) ? " · closing" : ""
         let title = track.label.capitalized + " detected"
-        let body = "\(rangeText)\(speedText)\(approachText) · \(Int(audio.currentDB)) dB · "
+        let heightText = track.measuredHeight.map { String(format: " · %.1f m tall", $0) } ?? ""
+        let body = "\(rangeText)\(speedText)\(approachText)\(heightText) · \(Int(audio.currentDB)) dB · "
             + "\(Int(track.bestConfidence * 100))% confidence · \(rangeSourceLabel) range"
 
         let jpeg = snapshotJPEG(from: pixelBuffer)
@@ -505,6 +564,7 @@ final class DetectionEngine: NSObject, ObservableObject {
             if let mps = t.speed(horizontalFOVRadians: fovRadians), mps > 0.3 {
                 s += String(format: " · %.0f mph", mps * 2.23694)
             }
+            if let h = t.measuredHeight { s += String(format: " · %.1fm", h) }
             return s
         }
         return isArmed ? String(format: "armed · %.0f dB", soundLevelDB) : "idle"

@@ -20,11 +20,27 @@ final class Track {
     var category: SubjectCategory = .unknown
     var label: String = "movement"
     var bestConfidence: Float = 0
+    var heightSamples: [Double] = []
+    var widthSamples: [Double] = []
     var maxJoints: Int = 0
 
     init(id: Int, box: CGRect) {
         self.id = id
         self.box = box
+    }
+
+    /// Median of recent height measurements — a single frame's box is noisy,
+    /// the median across a second of them is not.
+    var measuredHeight: Double? {
+        guard heightSamples.count >= 3 else { return nil }
+        let t = heightSamples.suffix(9).sorted()
+        return t[t.count / 2]
+    }
+
+    var measuredWidth: Double? {
+        guard widthSamples.count >= 3 else { return nil }
+        let t = widthSamples.suffix(9).sorted()
+        return t[t.count / 2]
     }
 
     var smoothedRange: Double? {
@@ -120,6 +136,17 @@ final class Tracker {
         tracks.removeAll { $0.misses > maxMisses }
 
         return tracks
+    }
+
+    func recordSize(height: Double?, width: Double?, for track: Track) {
+        if let h = height {
+            track.heightSamples.append(h)
+            if track.heightSamples.count > 20 { track.heightSamples.removeFirst() }
+        }
+        if let w = width {
+            track.widthSamples.append(w)
+            if track.widthSamples.count > 20 { track.widthSamples.removeFirst() }
+        }
     }
 
     func recordSample(range: Double?, for track: Track) {

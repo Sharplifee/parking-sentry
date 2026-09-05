@@ -16,6 +16,20 @@ struct RangeEstimate {
     let truncated: Bool
 }
 
+/// Real-world size of the subject, in metres.
+///
+/// Only reported when the range it is derived from came from somewhere OTHER
+/// than that same dimension — otherwise the answer is just the assumption fed
+/// back out. A person ranged by assumed height cannot then have their height
+/// "measured"; a person ranged by LiDAR can, and so can a car ranged by its
+/// width. Nil means "not independently knowable right now", which is the honest
+/// answer and better than echoing the input.
+struct SizeEstimate {
+    let heightMeters: Double?
+    let widthMeters: Double?
+    let derivedFrom: RangeSource
+}
+
 /// Two independent ways to answer "how far away is that".
 ///
 /// LiDAR is a real measurement but tops out around 5 m, so it is only useful for
@@ -132,6 +146,37 @@ final class DistanceEstimator {
             return RangeEstimate(meters: nil, source: .unavailable, truncated: truncated)
         }
         return RangeEstimate(meters: dist, source: .pinhole, truncated: false)
+    }
+
+    /// Turn an apparent box plus a known range into real dimensions.
+    /// `rangeIsIndependent` is false when the range itself was computed from one
+    /// of these dimensions, in which case that dimension is suppressed.
+    func size(box: CGRect, rangeMeters: Double, source: RangeSource,
+              metrics: SubjectMetrics, truncated: Bool) -> SizeEstimate {
+        guard let fy = focalYPixels, fy > 0, rangeMeters > 0 else {
+            return SizeEstimate(heightMeters: nil, widthMeters: nil, derivedFrom: .unavailable)
+        }
+
+        // Height is meaningless when the subject runs off the top or bottom edge.
+        var h: Double?
+        if !truncated {
+            let px = Double(box.height) * bufferHeightPixels
+            if px > 8 { h = (px * rangeMeters) / fy }
+        }
+        var w: Double?
+        let pxW = Double(box.width) * bufferWidthPixels
+        if pxW > 8 { w = (pxW * rangeMeters) / fy }
+
+        // Suppress whichever dimension the range was itself derived from.
+        if source == .pinhole {
+            if metrics.heightMeters != nil { h = nil }
+            if metrics.widthMeters != nil { w = nil }
+        }
+
+        // Sanity bounds: anything outside these is a bad box, not a real object.
+        if let hv = h, hv <= 0.05 || hv > 12 { h = nil }
+        if let wv = w, wv <= 0.05 || wv > 20 { w = nil }
+        return SizeEstimate(heightMeters: h, widthMeters: w, derivedFrom: source)
     }
 
     func estimate(box: CGRect, depthData: AVDepthData?, metrics: SubjectMetrics) -> RangeEstimate {

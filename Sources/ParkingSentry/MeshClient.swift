@@ -26,7 +26,9 @@ final class MeshClient: ObservableObject {
 
     private init() {
         let cfg = URLSessionConfiguration.default
-        cfg.timeoutIntervalForRequest = 12
+        // The relay is optional history, not a dependency: keep the timeout
+        // short so a box that is off or unreachable never stalls anything.
+        cfg.timeoutIntervalForRequest = 6
         cfg.waitsForConnectivity = false
         session = URLSession(configuration: cfg)
     }

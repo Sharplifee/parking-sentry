@@ -12,6 +12,10 @@ struct CameraPreview: UIViewRepresentable {
         let v = PreviewContainer()
         v.previewLayer.session = session
         v.previewLayer.videoGravity = .resizeAspectFill
+        // Hand the layer to the engine so the rotation coordinator can drive it;
+        // without this the preview never rotates and the overlay maths is wrong
+        // on any device not held in the default orientation.
+        DetectionEngine.shared?.previewLayer = v.previewLayer
         return v
     }
 

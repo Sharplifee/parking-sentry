@@ -110,7 +110,11 @@ struct VideoWallView: View {
     }
 
     private func armButton(_ p: MCPeerID) -> some View {
-        let armed = data.devices.first { $0.name == p.displayName }?.isArmed ?? false
+        // Armed state comes from the peer's own live status line, not from the
+        // remote relay: matching on display name failed whenever the relay was
+        // unreachable or the name had been changed on one side.
+        let status = mesh.statusLines[p] ?? ""
+        let armed = !status.isEmpty && status != "idle"
         return Button {
             mesh.send(command: armed ? "disarm" : "arm", to: p)
         } label: {
