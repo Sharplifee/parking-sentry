@@ -54,6 +54,7 @@ final class DetectionEngine: NSObject, ObservableObject {
     /// the alternative — a black rectangle and a status nobody reads — is what
     /// made an iPad look identical to a working device that just saw darkness.
     @Published var cameraProblem: String?
+    @Published var clipURLs: [URL] = []
     @Published var soundLevelDB: Float = 0
     @Published var ambientDB: Float = 0
 
@@ -81,6 +82,7 @@ final class DetectionEngine: NSObject, ObservableObject {
     private let detector = SubjectDetector()
     private let ranger = DistanceEstimator()
     private let audio = AudioMonitor()
+    private let clips = ClipRecorder()
     private let tracker = Tracker()
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
@@ -99,6 +101,11 @@ final class DetectionEngine: NSObject, ObservableObject {
     override init() {
         super.init()
         DetectionEngine.shared = self
+        ClipRecorder.prune()
+        clips.onClipFinished = { [weak self] url in
+            self?.clipURLs.insert(url, at: 0)
+        }
+        clipURLs = ClipRecorder.existingClips()
         modelStatus = detector.modelLoaded
             ? "YOLOv3-Tiny"
             : "model failed: " + (detector.modelLoadError ?? "unknown")
@@ -376,6 +383,11 @@ final class DetectionEngine: NSObject, ObservableObject {
     private func handle(sampleBuffer: CMSampleBuffer, depth: AVDepthData?) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
+        // Rolling pre-roll buffer: fed always while armed so a clip can start
+        // seconds BEFORE the trigger. A clip that begins at the detection has
+        // already missed the approach, which is the part worth seeing.
+        if isRunning { clips.ingest(sampleBuffer) }
+
         ranger.updateIntrinsics(from: sampleBuffer,
                                 bufferWidth: CVPixelBufferGetWidth(pixelBuffer),
                                 bufferHeight: CVPixelBufferGetHeight(pixelBuffer))
@@ -499,6 +511,8 @@ final class DetectionEngine: NSObject, ObservableObject {
         let heightText = track.measuredHeight.map { String(format: " · %.1f m tall", $0) } ?? ""
         let body = "\(rangeText)\(speedText)\(approachText)\(heightText) · \(Int(audio.currentDB)) dB · "
             + "\(Int(track.bestConfidence * 100))% confidence · \(rangeSourceLabel) range"
+
+        clips.trigger(label: track.label)
 
         let jpeg = snapshotJPEG(from: pixelBuffer)
         AlertManager.shared.fire(title: title, body: body, snapshot: jpeg, settings: settings)

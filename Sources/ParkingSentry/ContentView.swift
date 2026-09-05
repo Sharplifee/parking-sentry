@@ -7,6 +7,7 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var showLog = false
     @State private var showMesh = false
+    @State private var showClips = false
     @State private var showWall = false
     @State private var stealth = false
     @State private var priorBrightness: CGFloat = UIScreen.main.brightness
@@ -75,6 +76,7 @@ struct ContentView: View {
             MeshView().environmentObject(engine)
         }
         .fullScreenCover(isPresented: $showWall) { VideoWallView() }
+        .sheet(isPresented: $showClips) { ClipLibraryView().environmentObject(engine) }
     }
 
     private func enterStealth() {
@@ -164,6 +166,9 @@ struct ContentView: View {
                 }
                 Button { showLog = true } label: {
                     Label("Detections (\(engine.events.count))", systemImage: "list.bullet.rectangle")
+                }
+                Button { showClips = true } label: {
+                    Label("Recordings (\(engine.clipURLs.count))", systemImage: "film")
                 }
                 Button { showMesh = true } label: {
                     Label("Devices", systemImage: "square.grid.2x2")
