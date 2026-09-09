@@ -134,14 +134,27 @@ final class MeshClient: ObservableObject {
         heartbeatTimer?.invalidate()
         pollTimer?.invalidate()
         refresh()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            self?.refresh()
-        }
     }
 
     func stopTimers() {
         heartbeatTimer?.invalidate(); heartbeatTimer = nil
         pollTimer?.invalidate(); pollTimer = nil
+    }
+
+    /// Poll only while a screen that shows this data is actually open. A 5 s
+    /// timer running for the life of the app woke the radio hundreds of times
+    /// an hour to update a list nobody was looking at.
+    func beginPolling() {
+        pollTimer?.invalidate()
+        refresh()
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            self?.refresh()
+        }
+    }
+
+    func endPolling() {
+        pollTimer?.invalidate()
+        pollTimer = nil
     }
 
     func refresh() {

@@ -62,7 +62,9 @@ final class PeerMesh: NSObject, ObservableObject {
 
     // Video pacing
     private var lastFrameSent = Date.distantPast
-    private let frameInterval: TimeInterval = 1.0 / 12.0
+    /// Driven by the power budget rather than fixed: pushing video is one of
+    /// the most expensive things this app does.
+    private var frameInterval: TimeInterval { 1.0 / max(1, PowerManager.peerFPSSnapshot) }
     private var inFlight = false
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
     private let encodeQueue = DispatchQueue(label: "peermesh.encode", qos: .userInitiated)
@@ -138,6 +140,13 @@ final class PeerMesh: NSObject, ObservableObject {
     }
 
     /// Connected is not the same as streaming; the wall needs to tell them apart.
+    /// Called by the wall when it opens and closes: a feed being watched earns
+    /// a higher budget, and closing it must give that budget straight back.
+    func setWatching(_ watching: Bool) {
+        PowerManager.shared.beingWatched = watching
+        DetectionEngine.shared?.applyPowerBudget()
+    }
+
     func isStreaming(_ peer: MCPeerID) -> Bool {
         guard let t = lastFrameAt[peer] else { return false }
         return Date().timeIntervalSince(t) < 3

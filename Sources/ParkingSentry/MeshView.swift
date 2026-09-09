@@ -124,7 +124,8 @@ struct MeshView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             }
-            .onAppear { mesh.refresh() }
+            .onAppear { mesh.beginPolling() }
+            .onDisappear { mesh.endPolling() }
         }
     }
 

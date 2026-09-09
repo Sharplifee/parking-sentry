@@ -14,7 +14,9 @@ final class ClipRecorder {
 
     private let preRoll: TimeInterval = 6
     private let postRoll: TimeInterval = 8
-    private let fps: Double = 12
+    /// Pre-roll frame rate, from the power budget. Encoding a JPEG per frame
+    /// for hours is a real cost even when nothing is ever detected.
+    private var fps: Double { max(3, PowerManager.clipFPSSnapshot) }
     private let longEdge: CGFloat = 1280
 
     private struct Frame { let jpeg: Data; let t: TimeInterval }

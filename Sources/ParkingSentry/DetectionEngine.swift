@@ -100,12 +100,19 @@ final class DetectionEngine: NSObject, ObservableObject {
     /// Horizontal field of view of the active format, in radians per unit of normalized x.
     private var fovRadians: Double = 60 * .pi / 180
 
-    private let minVisionInterval: TimeInterval = 0.12   // ~8 Hz ceiling
+    /// Refreshed from the power budget instead of being a fixed ceiling.
+    private var visionIntervalNow: TimeInterval = 0.14
     private let forcedVisionInterval: TimeInterval = 2.0 // catch slow creep the gate missed
 
     override init() {
         super.init()
         DetectionEngine.shared = self
+        visionIntervalNow = PowerManager.shared.visionIntervalSync
+        PowerManager.shared.onChange = { [weak self] _ in
+            guard let self else { return }
+            self.visionIntervalNow = PowerManager.shared.visionIntervalSync
+            self.applyPowerBudget()
+        }
         ClipRecorder.prune()
         clips.onClipFinished = { [weak self] url in
             self?.clipURLs.insert(url, at: 0)
@@ -174,6 +181,8 @@ final class DetectionEngine: NSObject, ObservableObject {
                 // Link already runs from launch; nothing to start here.
             }
             DispatchQueue.main.async {
+                // Only hold the screen awake while actually watching for something.
+                UIApplication.shared.isIdleTimerDisabled = true
                 self.isRunning = true
                 self.status = "Learning background"
                 self.tracker.reset()
@@ -193,7 +202,13 @@ final class DetectionEngine: NSObject, ObservableObject {
             self.audio.stop()
             // Keep the peer link up after disarming so the device stays
             // watchable and can be re-armed remotely.
-            DispatchQueue.main.async { self.stopHeartbeat() }
+            DispatchQueue.main.async {
+                self.stopHeartbeat()
+                // Let the device sleep again once disarmed.
+                if !RemoteControl.shared.stealth {
+                    UIApplication.shared.isIdleTimerDisabled = false
+                }
+            }
             DispatchQueue.main.async {
                 self.isRunning = false
                 self.isArmed = false
@@ -465,7 +480,8 @@ final class DetectionEngine: NSObject, ObservableObject {
         // session has no device to validate against and answers yes to almost
         // anything — which is how an iPad ended up "running" at 4K it cannot
         // actually deliver, showing a black frame with no error.
-        let ladder: [AVCaptureSession.Preset] = settings.longRangeMode
+        let wantsHighRes = PowerManager.shared.allowsHighResolutionSync(userWants: settings.longRangeMode)
+        let ladder: [AVCaptureSession.Preset] = wantsHighRes
             ? [.hd4K3840x2160, .hd1920x1080, .hd1280x720, .high]
             : [.hd1920x1080, .hd1280x720, .high]
         if let usable = ladder.first(where: { session.canSetSessionPreset($0) }) {
@@ -486,6 +502,7 @@ final class DetectionEngine: NSObject, ObservableObject {
         if cam.isLowLightBoostSupported { cam.automaticallyEnablesLowLightBoostWhenAvailable = true }
         cam.videoZoomFactor = max(cam.minAvailableVideoZoomFactor,
                                   min(CGFloat(settings.zoomFactor), cam.maxAvailableVideoZoomFactor))
+        applyFrameRate(to: cam)
         cam.unlockForConfiguration()
 
         DispatchQueue.main.async {
@@ -495,6 +512,29 @@ final class DetectionEngine: NSObject, ObservableObject {
             self.zoom = cam.videoZoomFactor
         }
         return true
+    }
+
+    /// Clamp the sensor to the rate the current power budget allows. Must be
+    /// called inside a lockForConfiguration block.
+    private func applyFrameRate(to cam: AVCaptureDevice) {
+        let target = PowerManager.shared.captureFPSSync
+        let ranges = cam.activeFormat.videoSupportedFrameRateRanges
+        guard let range = ranges.first else { return }
+        let fps = Double(max(Int(range.minFrameRate), min(target, Int(range.maxFrameRate))))
+        let duration = CMTime(value: 1, timescale: CMTimeScale(fps))
+        cam.activeVideoMinFrameDuration = duration
+        cam.activeVideoMaxFrameDuration = duration
+    }
+
+    /// Re-apply the frame rate when the power budget shifts — hot device, Low
+    /// Power Mode, or someone opening a live feed.
+    func applyPowerBudget() {
+        sessionQueue.async { [weak self] in
+            guard let self, let cam = self.device else { return }
+            try? cam.lockForConfiguration()
+            self.applyFrameRate(to: cam)
+            cam.unlockForConfiguration()
+        }
     }
 
     private func rebuildRotationCoordinator() {
@@ -577,7 +617,7 @@ final class DetectionEngine: NSObject, ObservableObject {
             }
             return
         }
-        guard now.timeIntervalSince(lastVisionRun) >= minVisionInterval else { return }
+        guard now.timeIntervalSince(lastVisionRun) >= visionIntervalNow else { return }
         lastVisionRun = now
         if dueToClock { lastForcedVision = now }
 

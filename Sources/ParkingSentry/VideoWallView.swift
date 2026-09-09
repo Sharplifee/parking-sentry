@@ -26,7 +26,8 @@ struct VideoWallView: View {
 
             if stealth { stealthCurtain }
         }
-        .onAppear { mesh.start() }
+        .onAppear { mesh.start(); mesh.setWatching(true) }
+        .onDisappear { mesh.setWatching(false) }
         .overlay(alignment: .topTrailing) { if !stealth { closeButton } }
         .overlay(alignment: .bottom) { if !stealth { bottomBar } }
         .statusBarHidden(stealth)

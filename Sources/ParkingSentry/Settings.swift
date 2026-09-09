@@ -61,7 +61,7 @@ final class Settings: ObservableObject {
     private init() {
         useFrontCamera       = bool("useFrontCamera", false)
         zoomFactor           = dbl("zoomFactor", 1.0)
-        longRangeMode        = bool("longRangeMode", true)
+        longRangeMode        = bool("longRangeMode", false)
         nightView            = bool("nightView", false)
         personConfidence     = dbl("personConfidence", 0.55)
         motionSensitivity    = dbl("motionSensitivity", 0.004)

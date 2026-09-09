@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var showClips = false
     @State private var showWall = false
     @ObservedObject private var remote = RemoteControl.shared
+    @ObservedObject private var power = PowerManager.shared
     @State private var priorBrightness: CGFloat = UIScreen.main.brightness
     @State private var pinchStart: CGFloat = 1
 
@@ -134,6 +135,7 @@ struct ContentView: View {
                 stat("range", engine.rangeSourceLabel)
                 stat("zoom", String(format: "%.1fx", engine.zoom))
                 stat("cam", engine.usingFrontCamera ? "front" : "back")
+                stat("power", power.summary)
                 Spacer(minLength: 0)
             }
         }
