@@ -280,8 +280,18 @@ extension PeerMesh: MCSessionDelegate {
             let cmd = String(decoding: body, as: UTF8.self)
             Task { @MainActor in
                 switch cmd {
-                case "arm":    DetectionEngine.shared?.start()
-                case "disarm": DetectionEngine.shared?.stop()
+                case "arm":
+                    // Remote arming must never light the screen: the point is a
+                    // propped device that looks off while it watches.
+                    RemoteControl.shared.armSilently()
+                case "disarm":
+                    DetectionEngine.shared?.stop()
+                case "flip":
+                    DetectionEngine.shared?.flipCamera()
+                case "stealthOn":
+                    RemoteControl.shared.stealth = true
+                case "stealthOff":
+                    RemoteControl.shared.stealth = false
                 default: break
                 }
             }

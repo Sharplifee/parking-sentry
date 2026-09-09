@@ -115,11 +115,22 @@ struct VideoWallView: View {
         // unreachable or the name had been changed on one side.
         let status = mesh.statusLines[p] ?? ""
         let armed = !status.isEmpty && status != "idle"
-        return Button {
-            mesh.send(command: armed ? "disarm" : "arm", to: p)
-        } label: {
-            Image(systemName: armed ? "shield.slash.fill" : "shield.fill")
-                .padding(9).background(.ultraThinMaterial, in: Circle())
+        return HStack(spacing: 6) {
+            Button { mesh.send(command: armed ? "disarm" : "arm", to: p) } label: {
+                Image(systemName: armed ? "shield.slash.fill" : "shield.fill")
+                    .padding(9).background(.ultraThinMaterial, in: Circle())
+            }
+            Button { mesh.send(command: "flip", to: p) } label: {
+                Image(systemName: "arrow.triangle.2.circlepath.camera")
+                    .padding(9).background(.ultraThinMaterial, in: Circle())
+            }
+            Menu {
+                Button("Blackout that screen") { mesh.send(command: "stealthOn", to: p) }
+                Button("Wake that screen") { mesh.send(command: "stealthOff", to: p) }
+            } label: {
+                Image(systemName: "moon.circle")
+                    .padding(9).background(.ultraThinMaterial, in: Circle())
+            }
         }
         .foregroundStyle(.white).padding(8)
     }

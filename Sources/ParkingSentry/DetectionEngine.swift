@@ -55,6 +55,10 @@ final class DetectionEngine: NSObject, ObservableObject {
     /// made an iPad look identical to a working device that just saw darkness.
     @Published var cameraProblem: String?
     @Published var clipURLs: [URL] = []
+    @Published var usingFrontCamera = false
+    @Published var zoom: CGFloat = 1
+    @Published var minZoom: CGFloat = 1
+    @Published var maxZoom: CGFloat = 1
     @Published var soundLevelDB: Float = 0
     @Published var ambientDB: Float = 0
 
@@ -240,107 +244,7 @@ final class DetectionEngine: NSObject, ObservableObject {
         session.beginConfiguration()
 
 
-        let position: AVCaptureDevice.Position = settings.useFrontCamera ? .front : .back
-        let types: [AVCaptureDevice.DeviceType] = position == .back
-            ? [.builtInLiDARDepthCamera, .builtInDualWideCamera, .builtInWideAngleCamera]
-            : [.builtInTrueDepthCamera, .builtInWideAngleCamera]
-
-        var found = AVCaptureDevice.DiscoverySession(deviceTypes: types,
-                                                     mediaType: .video,
-                                                     position: position).devices
-        if found.isEmpty {
-            // iPads vary far more than iPhones in which camera types they expose;
-            // fall back to any camera at all rather than showing black.
-            found = AVCaptureDevice.DiscoverySession(
-                deviceTypes: [.builtInWideAngleCamera, .builtInDualWideCamera,
-                              .builtInTrueDepthCamera, .builtInLiDARDepthCamera],
-                mediaType: .video, position: .unspecified).devices
-        }
-        guard let cam = found.first else {
-            session.commitConfiguration()
-            DispatchQueue.main.async {
-                self.cameraProblem = "No camera available on this device."
-            }
-            return
-        }
-        guard let input = try? AVCaptureDeviceInput(device: cam), session.canAddInput(input) else {
-            session.commitConfiguration()
-            DispatchQueue.main.async {
-                self.cameraProblem = "This device's camera could not be opened. Close any other app using it and reopen MotionSentry."
-            }
-            return
-        }
-        session.addInput(input)
-        device = cam
-
-        // Preset is chosen HERE, after the input exists. Asked before, the
-        // session has no device to validate against and answers yes to almost
-        // anything — which is how an iPad ended up "running" at 4K it cannot
-        // actually deliver, showing a black frame with no error.
-        let ladder: [AVCaptureSession.Preset] = settings.longRangeMode
-            ? [.hd4K3840x2160, .hd1920x1080, .hd1280x720, .high]
-            : [.hd1920x1080, .hd1280x720, .high]
-        if let usable = ladder.first(where: { session.canSetSessionPreset($0) }) {
-            session.sessionPreset = usable
-        } else {
-            session.sessionPreset = .high
-        }
-
-        videoOutput.videoSettings = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-        ]
-        videoOutput.alwaysDiscardsLateVideoFrames = true
-        if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) }
-
-        // Without this the ranging math has no focal length to work with.
-        if let vc = videoOutput.connection(with: .video),
-           vc.isCameraIntrinsicMatrixDeliverySupported {
-            vc.isCameraIntrinsicMatrixDeliveryEnabled = true
-        }
-        // Fallback focal length derived from the active format's field of view.
-        ranger.horizontalFOVDegrees = Double(cam.activeFormat.videoFieldOfView)
-        fovRadians = Double(cam.activeFormat.videoFieldOfView) * .pi / 180
-
-        var haveDepth = false
-        if session.canAddOutput(depthOutput) {
-            session.addOutput(depthOutput)
-            depthOutput.isFilteringEnabled = true
-            if let dc = depthOutput.connection(with: .depthData), dc.isEnabled {
-                haveDepth = true
-            } else {
-                session.removeOutput(depthOutput)
-            }
-        }
-
-        if haveDepth {
-            let sync = AVCaptureDataOutputSynchronizer(dataOutputs: [videoOutput, depthOutput])
-            sync.setDelegate(self, queue: sessionQueue)
-            synchronizer = sync
-        } else {
-            synchronizer = nil
-            videoOutput.setSampleBufferDelegate(self, queue: sessionQueue)
-        }
-
-        // Deliver upright buffers so Vision, the motion gate and the overlay all share one space.
-        DispatchQueue.main.async { self.observeSessionHealth() }
-        rebuildRotationCoordinator()
-
-        // Mirroring must be identical on the preview and on the frames Vision
-        // sees, or the boxes are horizontally flipped on the front camera. Pin
-        // both to un-mirrored so the two spaces always agree.
-        for c in [videoOutput.connection(with: .video), previewLayer?.connection].compactMap({ $0 }) {
-            if c.isVideoMirroringSupported {
-                c.automaticallyAdjustsVideoMirroring = false
-                c.isVideoMirrored = false
-            }
-        }
-
-        try? cam.lockForConfiguration()
-        if cam.isFocusModeSupported(.continuousAutoFocus) { cam.focusMode = .continuousAutoFocus }
-        if cam.isExposureModeSupported(.continuousAutoExposure) { cam.exposureMode = .continuousAutoExposure }
-        if cam.isLowLightBoostSupported { cam.automaticallyEnablesLowLightBoostWhenAvailable = true }
-        cam.videoZoomFactor = max(1.0, min(CGFloat(settings.zoomFactor), cam.maxAvailableVideoZoomFactor))
-        cam.unlockForConfiguration()
+        guard attachCamera() else { session.commitConfiguration(); return }
 
         session.commitConfiguration()
         let ml = detector.modelLoaded ? "YOLOv3-Tiny" : ("model failed: " + (detector.modelLoadError ?? "unknown"))
@@ -418,6 +322,153 @@ final class DetectionEngine: NSObject, ObservableObject {
         default:
             return "The camera was interrupted by the system."
         }
+    }
+
+    /// Swap between the front and back camera without tearing the session down.
+    func flipCamera() {
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            self.settings.useFrontCamera.toggle()
+            self.session.beginConfiguration()
+            for input in self.session.inputs { self.session.removeInput(input) }
+            self.attachCamera()
+            self.session.commitConfiguration()
+            DispatchQueue.main.async {
+                self.usingFrontCamera = self.settings.useFrontCamera
+                self.gate.reset()
+                self.tracker.reset()
+            }
+        }
+    }
+
+    /// Pinch-to-zoom, clamped to what the lens actually supports.
+    func setZoom(_ factor: CGFloat) {
+        sessionQueue.async { [weak self] in
+            guard let self, let cam = self.device else { return }
+            let clamped = max(cam.minAvailableVideoZoomFactor,
+                              min(factor, min(cam.maxAvailableVideoZoomFactor, 12)))
+            try? cam.lockForConfiguration()
+            cam.videoZoomFactor = clamped
+            cam.unlockForConfiguration()
+            DispatchQueue.main.async {
+                self.zoom = clamped
+                self.settings.zoomFactor = Double(clamped)
+            }
+        }
+    }
+
+
+    /// Pick, open and configure a camera and add it to the session.
+    /// Shared by first-time setup and by flipping, so the two can never drift.
+    @discardableResult
+    private func attachCamera() -> Bool {
+        let position: AVCaptureDevice.Position = settings.useFrontCamera ? .front : .back
+        let types: [AVCaptureDevice.DeviceType] = position == .back
+            ? [.builtInLiDARDepthCamera, .builtInDualWideCamera, .builtInWideAngleCamera]
+            : [.builtInTrueDepthCamera, .builtInWideAngleCamera]
+
+        var found = AVCaptureDevice.DiscoverySession(deviceTypes: types,
+                                                     mediaType: .video,
+                                                     position: position).devices
+        if found.isEmpty {
+            // iPads vary far more than iPhones in which camera types they expose;
+            // fall back to any camera at all rather than showing black.
+            found = AVCaptureDevice.DiscoverySession(
+                deviceTypes: [.builtInWideAngleCamera, .builtInDualWideCamera,
+                              .builtInTrueDepthCamera, .builtInLiDARDepthCamera],
+                mediaType: .video, position: .unspecified).devices
+        }
+        guard let cam = found.first else {
+            DispatchQueue.main.async {
+                self.cameraProblem = "No camera available on this device."
+            }
+            return false
+        }
+        guard let input = try? AVCaptureDeviceInput(device: cam), session.canAddInput(input) else {
+            DispatchQueue.main.async {
+                self.cameraProblem = "This device's camera could not be opened. Close any other app using it and reopen MotionSentry."
+            }
+            return false
+        }
+        session.addInput(input)
+        device = cam
+
+        // Preset is chosen HERE, after the input exists. Asked before, the
+        // session has no device to validate against and answers yes to almost
+        // anything — which is how an iPad ended up "running" at 4K it cannot
+        // actually deliver, showing a black frame with no error.
+        let ladder: [AVCaptureSession.Preset] = settings.longRangeMode
+            ? [.hd4K3840x2160, .hd1920x1080, .hd1280x720, .high]
+            : [.hd1920x1080, .hd1280x720, .high]
+        if let usable = ladder.first(where: { session.canSetSessionPreset($0) }) {
+            session.sessionPreset = usable
+        } else {
+            session.sessionPreset = .high
+        }
+
+        videoOutput.videoSettings = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+        ]
+        videoOutput.alwaysDiscardsLateVideoFrames = true
+        if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) }
+
+        // Without this the ranging math has no focal length to work with.
+        if let vc = videoOutput.connection(with: .video),
+           vc.isCameraIntrinsicMatrixDeliverySupported {
+            vc.isCameraIntrinsicMatrixDeliveryEnabled = true
+        }
+        // Fallback focal length derived from the active format's field of view.
+        ranger.horizontalFOVDegrees = Double(cam.activeFormat.videoFieldOfView)
+        fovRadians = Double(cam.activeFormat.videoFieldOfView) * .pi / 180
+
+        var haveDepth = false
+        if session.canAddOutput(depthOutput) {
+            session.addOutput(depthOutput)
+            depthOutput.isFilteringEnabled = true
+            if let dc = depthOutput.connection(with: .depthData), dc.isEnabled {
+                haveDepth = true
+            } else {
+                session.removeOutput(depthOutput)
+            }
+        }
+
+        if haveDepth {
+            let sync = AVCaptureDataOutputSynchronizer(dataOutputs: [videoOutput, depthOutput])
+            sync.setDelegate(self, queue: sessionQueue)
+            synchronizer = sync
+        } else {
+            synchronizer = nil
+            videoOutput.setSampleBufferDelegate(self, queue: sessionQueue)
+        }
+
+        // Deliver upright buffers so Vision, the motion gate and the overlay all share one space.
+        DispatchQueue.main.async { self.observeSessionHealth() }
+        rebuildRotationCoordinator()
+
+        // Mirroring must be identical on the preview and on the frames Vision
+        // sees, or the boxes are horizontally flipped on the front camera. Pin
+        // both to un-mirrored so the two spaces always agree.
+        for c in [videoOutput.connection(with: .video), previewLayer?.connection].compactMap({ $0 }) {
+            if c.isVideoMirroringSupported {
+                c.automaticallyAdjustsVideoMirroring = false
+                c.isVideoMirrored = false
+            }
+        }
+
+        try? cam.lockForConfiguration()
+        if cam.isFocusModeSupported(.continuousAutoFocus) { cam.focusMode = .continuousAutoFocus }
+        if cam.isExposureModeSupported(.continuousAutoExposure) { cam.exposureMode = .continuousAutoExposure }
+        if cam.isLowLightBoostSupported { cam.automaticallyEnablesLowLightBoostWhenAvailable = true }
+        cam.videoZoomFactor = max(1.0, min(CGFloat(settings.zoomFactor), cam.maxAvailableVideoZoomFactor))
+        cam.unlockForConfiguration()
+
+        DispatchQueue.main.async {
+            self.usingFrontCamera = (cam.position == .front)
+            self.minZoom = cam.minAvailableVideoZoomFactor
+            self.maxZoom = min(cam.maxAvailableVideoZoomFactor, 12)
+            self.zoom = cam.videoZoomFactor
+        }
+        return true
     }
 
     private func rebuildRotationCoordinator() {
@@ -534,13 +585,11 @@ final class DetectionEngine: NSObject, ObservableObject {
 
         let boxes = tracks.filter { $0.misses <= 2 }.map { t -> BoxOverlay in
             let name = t.label.capitalized
-            var text = t.smoothedRange.map { String(format: "%@  %.0f m", name, $0) } ?? name
+            var text = t.smoothedRange.map { "\(name)  " + Units.distance($0) } ?? name
             if let mps = t.speed(horizontalFOVRadians: self.fovRadians), mps > 0.3 {
-                text += String(format: "  %.0f mph", mps * 2.23694)
+                text += "  " + Units.speed(mps)
             }
-            if let h = t.measuredHeight {
-                text += String(format: "  %.1f m tall", h)
-            }
+            if let h = t.measuredHeight { text += "  " + Units.height(h) }
             return BoxOverlay(id: t.id,
                               rect: t.box,
                               label: text,
@@ -579,13 +628,13 @@ final class DetectionEngine: NSObject, ObservableObject {
 
         track.lastAlert = Date()
 
-        let rangeText = range.map { String(format: "%.0f m away", $0) } ?? "range unknown"
+        let rangeText = range.map { Units.distance($0) + " away" } ?? "range unknown"
         let mps = track.speed(horizontalFOVRadians: fovRadians)
         let speedText = (mps != nil && mps! > 0.3)
-            ? String(format: " · %.0f mph", mps! * 2.23694) : ""
+            ? " · " + Units.speed(mps!) : ""
         let approachText = (track.closingRate.map { $0 < -0.3 } ?? false) ? " · closing" : ""
         let title = track.label.capitalized + " detected"
-        let heightText = track.measuredHeight.map { String(format: " · %.1f m tall", $0) } ?? ""
+        let heightText = track.measuredHeight.map { " · " + Units.height($0) + " tall" } ?? ""
         let body = "\(rangeText)\(speedText)\(approachText)\(heightText) · \(Int(audio.currentDB)) dB · "
             + "\(Int(track.bestConfidence * 100))% confidence · \(rangeSourceLabel) range"
 
@@ -651,11 +700,11 @@ final class DetectionEngine: NSObject, ObservableObject {
     private func liveStatusLine() -> String {
         if let t = tracker.active.first(where: { $0.misses == 0 && $0.hits >= settings.confirmHits }) {
             var s = t.label.capitalized
-            if let r = t.smoothedRange { s += String(format: " %.0f m", r) }
+            if let r = t.smoothedRange { s += " " + Units.distance(r) }
             if let mps = t.speed(horizontalFOVRadians: fovRadians), mps > 0.3 {
-                s += String(format: " · %.0f mph", mps * 2.23694)
+                s += " · " + Units.speed(mps)
             }
-            if let h = t.measuredHeight { s += String(format: " · %.1fm", h) }
+            if let h = t.measuredHeight { s += " · " + Units.height(h) }
             return s
         }
         return isArmed ? String(format: "armed · %.0f dB", soundLevelDB) : "idle"

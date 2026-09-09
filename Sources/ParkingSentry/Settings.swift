@@ -20,6 +20,10 @@ final class Settings: ObservableObject {
     @Published var zoomFactor: Double { didSet { d.set(zoomFactor, forKey: "zoomFactor") } }
     /// Capture at 4K instead of 1080p. Roughly doubles usable detection range, costs battery.
     @Published var longRangeMode: Bool { didSet { d.set(longRangeMode, forKey: "longRangeMode") } }
+    /// Show the depth sensor's view instead of the colour image. Works in the
+    /// dark; short range only. iOS exposes no raw infrared image on any device,
+    /// so this is the closest thing that genuinely exists.
+    @Published var nightView: Bool { didSet { d.set(nightView, forKey: "nightView") } }
 
     // MARK: Detection
     /// Minimum Vision confidence for a human rectangle to count at all.
@@ -49,11 +53,16 @@ final class Settings: ObservableObject {
     @Published var cooldownSeconds: Double { didSet { d.set(cooldownSeconds, forKey: "cooldownSeconds") } }
     /// Grace period after arming so you can walk out of frame.
     @Published var armDelaySeconds: Double { didSet { d.set(armDelaySeconds, forKey: "armDelaySeconds") } }
+    /// Feet and miles per hour by default; metric is opt-in.
+    @Published var useMetric: Bool {
+        didSet { d.set(useMetric, forKey: "useMetric"); Units.useMetric = useMetric }
+    }
 
     private init() {
         useFrontCamera       = bool("useFrontCamera", false)
         zoomFactor           = dbl("zoomFactor", 1.0)
         longRangeMode        = bool("longRangeMode", true)
+        nightView            = bool("nightView", false)
         personConfidence     = dbl("personConfidence", 0.55)
         motionSensitivity    = dbl("motionSensitivity", 0.004)
         confirmHits          = int("confirmHits", 3)
@@ -70,6 +79,9 @@ final class Settings: ObservableObject {
         notificationsEnabled = bool("notificationsEnabled", true)
         webhookURL           = store.string(forKey: "webhookURL") ?? ""
         cooldownSeconds      = dbl("cooldownSeconds", 20.0)
-        armDelaySeconds      = dbl("armDelaySeconds", 15.0)
+        // 15 s was far too long to stand around for; 5 is enough to set a device
+        // down and step away, and the dial goes to zero for immediate arming.
+        armDelaySeconds      = dbl("armDelaySeconds", 5.0)
+        useMetric            = bool("useMetric", false)
     }
 }

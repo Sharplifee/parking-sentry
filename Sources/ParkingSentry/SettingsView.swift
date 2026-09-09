@@ -8,7 +8,20 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("Units") {
+                    Picker("Show distances in", selection: $settings.useMetric) {
+                        Text("Feet / mph").tag(false)
+                        Text("Metres / km-h").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                }
+
                 Section("Camera") {
+                    Toggle("Night view (depth)", isOn: $settings.nightView)
+                    Text(engine.depthAvailable
+                         ? "Renders what the depth sensor sees instead of the colour image. It works in total darkness because the sensor lights the scene with its own infrared, and unlike the camera it is not fooled by shadows. Range is a few metres — it is for a doorway, not a parking lot."
+                         : "This device has no depth sensor, so night view is unavailable here. iOS gives apps no access to a raw infrared image on any device.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Toggle("Front camera", isOn: $settings.useFrontCamera)
                     Toggle("Long range (4K capture)", isOn: $settings.longRangeMode)
                     slider("Zoom", value: $settings.zoomFactor, range: 1...5, step: 0.25,
@@ -61,8 +74,25 @@ struct SettingsView: View {
                         .autocorrectionDisabled()
                     slider("Per-subject cooldown", value: $settings.cooldownSeconds, range: 5...120, step: 5,
                            format: { String(format: "%.0f s", $0) })
-                    slider("Arming delay", value: $settings.armDelaySeconds, range: 0...120, step: 5,
-                           format: { String(format: "%.0f s", $0) })
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Arming delay")
+                            Spacer()
+                            Text(settings.armDelaySeconds == 0
+                                 ? "immediate"
+                                 : String(format: "%.0f s", settings.armDelaySeconds))
+                                .foregroundStyle(.secondary).monospacedDigit()
+                        }
+                        Picker("", selection: $settings.armDelaySeconds) {
+                            Text("Now").tag(0.0)
+                            Text("3s").tag(3.0)
+                            Text("5s").tag(5.0)
+                            Text("10s").tag(10.0)
+                            Text("30s").tag(30.0)
+                            Text("60s").tag(60.0)
+                        }
+                        .pickerStyle(.segmented)
+                    }
                     Text("The webhook is a plain POST with the message as the body, so an ntfy.sh topic will buzz your phone while the iPad sits in the lot.")
                         .font(.caption).foregroundStyle(.secondary)
                 }

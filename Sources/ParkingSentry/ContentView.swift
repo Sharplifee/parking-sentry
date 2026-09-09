@@ -9,8 +9,9 @@ struct ContentView: View {
     @State private var showMesh = false
     @State private var showClips = false
     @State private var showWall = false
-    @State private var stealth = false
+    @ObservedObject private var remote = RemoteControl.shared
     @State private var priorBrightness: CGFloat = UIScreen.main.brightness
+    @State private var pinchStart: CGFloat = 1
 
     var body: some View {
         ZStack {
@@ -18,6 +19,14 @@ struct ContentView: View {
 
             CameraPreview(session: engine.session, overlays: engine.overlays)
                 .ignoresSafeArea()
+                .gesture(
+                    MagnificationGesture()
+                        .onChanged { value in
+                            engine.setZoom(pinchStart * value)
+                        }
+                        .onEnded { _ in pinchStart = engine.zoom }
+                )
+                .onTapGesture(count: 2) { engine.flipCamera() }
 
             if let problem = engine.cameraProblem {
                 VStack(spacing: 14) {
@@ -52,7 +61,7 @@ struct ContentView: View {
             }
             .padding()
 
-            if stealth {
+            if remote.stealth {
                 // Blacks out this device only. Detection, alerts and the peer
                 // link all keep running underneath.
                 Color.black.ignoresSafeArea()
@@ -68,8 +77,8 @@ struct ContentView: View {
             }
         }
         .onAppear { engine.startPreview() }
-        .statusBarHidden(stealth)
-        .persistentSystemOverlays(stealth ? .hidden : .automatic)
+        .statusBarHidden(remote.stealth)
+        .persistentSystemOverlays(remote.stealth ? .hidden : .automatic)
         .sheet(isPresented: $showSettings) {
             SettingsView().environmentObject(settings).environmentObject(engine)
         }
@@ -84,14 +93,11 @@ struct ContentView: View {
     }
 
     private func enterStealth() {
-        priorBrightness = UIScreen.main.brightness
-        withAnimation(.easeInOut(duration: 0.45)) { stealth = true }
-        UIScreen.main.brightness = 0
+        withAnimation(.easeInOut(duration: 0.45)) { RemoteControl.shared.stealth = true }
     }
 
     private func exitStealth() {
-        UIScreen.main.brightness = priorBrightness
-        withAnimation(.easeInOut(duration: 0.25)) { stealth = false }
+        withAnimation(.easeInOut(duration: 0.25)) { RemoteControl.shared.stealth = false }
     }
 
     private var telemetry: some View {
@@ -126,7 +132,8 @@ struct ContentView: View {
             HStack(spacing: 12) {
                 stat("sound", String(format: "%.0fdB", engine.soundLevelDB))
                 stat("range", engine.rangeSourceLabel)
-                stat("model", engine.modelStatus.hasPrefix("model failed") ? "failed" : engine.modelStatus)
+                stat("zoom", String(format: "%.1fx", engine.zoom))
+                stat("cam", engine.usingFrontCamera ? "front" : "back")
                 Spacer(minLength: 0)
             }
         }
@@ -161,6 +168,12 @@ struct ContentView: View {
             .background(engine.isRunning ? Color.red : Color.green, in: Capsule())
             .foregroundStyle(.white)
 
+            circleButton(engine.usingFrontCamera
+                         ? "arrow.triangle.2.circlepath.camera.fill"
+                         : "arrow.triangle.2.circlepath.camera") {
+                engine.flipCamera()
+                pinchStart = 1
+            }
             circleButton("rectangle.on.rectangle") { showWall = true }
             circleButton("moon.fill") { enterStealth() }
 
