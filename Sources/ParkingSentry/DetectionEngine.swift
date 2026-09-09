@@ -107,10 +107,10 @@ final class DetectionEngine: NSObject, ObservableObject {
     override init() {
         super.init()
         DetectionEngine.shared = self
-        visionIntervalNow = PowerManager.shared.visionIntervalSync
-        PowerManager.shared.onChange = { [weak self] _ in
+        visionIntervalNow = PowerManager.visionIntervalSnapshot
+        PowerManager.onBudgetChange = { [weak self] in
             guard let self else { return }
-            self.visionIntervalNow = PowerManager.shared.visionIntervalSync
+            self.visionIntervalNow = PowerManager.visionIntervalSnapshot
             self.applyPowerBudget()
         }
         ClipRecorder.prune()
@@ -480,7 +480,7 @@ final class DetectionEngine: NSObject, ObservableObject {
         // session has no device to validate against and answers yes to almost
         // anything — which is how an iPad ended up "running" at 4K it cannot
         // actually deliver, showing a black frame with no error.
-        let wantsHighRes = PowerManager.shared.allowsHighResolutionSync(userWants: settings.longRangeMode)
+        let wantsHighRes = settings.longRangeMode && PowerManager.allowHighResSnapshot
         let ladder: [AVCaptureSession.Preset] = wantsHighRes
             ? [.hd4K3840x2160, .hd1920x1080, .hd1280x720, .high]
             : [.hd1920x1080, .hd1280x720, .high]
@@ -517,7 +517,7 @@ final class DetectionEngine: NSObject, ObservableObject {
     /// Clamp the sensor to the rate the current power budget allows. Must be
     /// called inside a lockForConfiguration block.
     private func applyFrameRate(to cam: AVCaptureDevice) {
-        let target = PowerManager.shared.captureFPSSync
+        let target = PowerManager.captureFPSSnapshot
         let ranges = cam.activeFormat.videoSupportedFrameRateRanges
         guard let range = ranges.first else { return }
         let fps = Double(max(Int(range.minFrameRate), min(target, Int(range.maxFrameRate))))

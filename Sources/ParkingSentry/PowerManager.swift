@@ -31,6 +31,9 @@ final class PowerManager: ObservableObject {
     @Published var beingWatched = false { didSet { recompute() } }
 
     private var observers: [NSObjectProtocol] = []
+    /// Notified on the main queue when the budget shifts. nonisolated storage so
+    /// objects created off the main actor can register without hopping.
+    nonisolated(unsafe) static var onBudgetChange: (() -> Void)?
     var onChange: ((Budget) -> Void)?
 
     /// Snapshots readable from any queue — the capture path cannot hop to the
@@ -77,11 +80,15 @@ final class PowerManager: ObservableObject {
                 budget = .normal
             }
         }
+        Self.allowHighResSnapshot = (budget == .full || budget == .normal)
         Self.captureFPSSnapshot = captureFPS
         Self.visionIntervalSnapshot = visionInterval
         Self.peerFPSSnapshot = peerFPS
         Self.clipFPSSnapshot = clipFPS
-        if budget != old { onChange?(budget) }
+        if budget != old {
+            onChange?(budget)
+            Self.onBudgetChange?()
+        }
     }
 
     // MARK: What each budget actually costs
@@ -137,10 +144,6 @@ final class PowerManager: ObservableObject {
         case .reduced, .minimal: return false
         }
     }
-
-    func allowsHighResolutionSync(userWants: Bool) -> Bool { allowsHighResolution(userWants: userWants) }
-    var captureFPSSync: Int { captureFPS }
-    var visionIntervalSync: TimeInterval { visionInterval }
 
     /// Plain-language line for the telemetry row.
     var summary: String {
