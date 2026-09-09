@@ -243,10 +243,58 @@ final class DetectionEngine: NSObject, ObservableObject {
     private func configure() {
         session.beginConfiguration()
 
-
         guard attachCamera() else { session.commitConfiguration(); return }
 
+        videoOutput.videoSettings = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+        ]
+        videoOutput.alwaysDiscardsLateVideoFrames = true
+        if !session.outputs.contains(videoOutput), session.canAddOutput(videoOutput) {
+            session.addOutput(videoOutput)
+        }
+
+        // Without this the ranging math has no focal length to work with.
+        if let vc = videoOutput.connection(with: .video),
+           vc.isCameraIntrinsicMatrixDeliverySupported {
+            vc.isCameraIntrinsicMatrixDeliveryEnabled = true
+        }
+
+        var haveDepth = false
+        if !session.outputs.contains(depthOutput), session.canAddOutput(depthOutput) {
+            session.addOutput(depthOutput)
+            depthOutput.isFilteringEnabled = true
+            if let dc = depthOutput.connection(with: .depthData), dc.isEnabled {
+                haveDepth = true
+            } else {
+                session.removeOutput(depthOutput)
+            }
+        } else if session.outputs.contains(depthOutput) {
+            haveDepth = depthOutput.connection(with: .depthData)?.isEnabled ?? false
+        }
+
+        if haveDepth {
+            let sync = AVCaptureDataOutputSynchronizer(dataOutputs: [videoOutput, depthOutput])
+            sync.setDelegate(self, queue: sessionQueue)
+            synchronizer = sync
+        } else {
+            synchronizer = nil
+            videoOutput.setSampleBufferDelegate(self, queue: sessionQueue)
+        }
+
+        DispatchQueue.main.async { self.observeSessionHealth() }
+        rebuildRotationCoordinator()
+
+        // Mirroring must be identical on the preview and on the frames Vision
+        // sees, or the boxes are horizontally flipped on the front camera.
+        for c in [videoOutput.connection(with: .video), previewLayer?.connection].compactMap({ $0 }) {
+            if c.isVideoMirroringSupported {
+                c.automaticallyAdjustsVideoMirroring = false
+                c.isVideoMirrored = false
+            }
+        }
+
         session.commitConfiguration()
+
         let ml = detector.modelLoaded ? "YOLOv3-Tiny" : ("model failed: " + (detector.modelLoadError ?? "unknown"))
         DispatchQueue.main.async {
             self.depthAvailable = haveDepth
@@ -333,6 +381,16 @@ final class DetectionEngine: NSObject, ObservableObject {
             for input in self.session.inputs { self.session.removeInput(input) }
             self.attachCamera()
             self.session.commitConfiguration()
+            // The new lens has its own orientation and mirroring; outputs stay
+            // attached, but their connections must be re-pointed at it.
+            self.rebuildRotationCoordinator()
+            for c in [self.videoOutput.connection(with: .video),
+                      self.previewLayer?.connection].compactMap({ $0 }) {
+                if c.isVideoMirroringSupported {
+                    c.automaticallyAdjustsVideoMirroring = false
+                    c.isVideoMirrored = false
+                }
+            }
             DispatchQueue.main.async {
                 self.usingFrontCamera = self.settings.useFrontCamera
                 self.gate.reset()
@@ -406,60 +464,18 @@ final class DetectionEngine: NSObject, ObservableObject {
             session.sessionPreset = .high
         }
 
-        videoOutput.videoSettings = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-        ]
-        videoOutput.alwaysDiscardsLateVideoFrames = true
-        if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) }
-
-        // Without this the ranging math has no focal length to work with.
-        if let vc = videoOutput.connection(with: .video),
-           vc.isCameraIntrinsicMatrixDeliverySupported {
-            vc.isCameraIntrinsicMatrixDeliveryEnabled = true
-        }
-        // Fallback focal length derived from the active format's field of view.
+        // Focal length for ranging: intrinsics when the connection supplies
+        // them, field of view as the fallback. Re-read on every attach because
+        // the front and back lenses are not the same.
         ranger.horizontalFOVDegrees = Double(cam.activeFormat.videoFieldOfView)
         fovRadians = Double(cam.activeFormat.videoFieldOfView) * .pi / 180
-
-        var haveDepth = false
-        if session.canAddOutput(depthOutput) {
-            session.addOutput(depthOutput)
-            depthOutput.isFilteringEnabled = true
-            if let dc = depthOutput.connection(with: .depthData), dc.isEnabled {
-                haveDepth = true
-            } else {
-                session.removeOutput(depthOutput)
-            }
-        }
-
-        if haveDepth {
-            let sync = AVCaptureDataOutputSynchronizer(dataOutputs: [videoOutput, depthOutput])
-            sync.setDelegate(self, queue: sessionQueue)
-            synchronizer = sync
-        } else {
-            synchronizer = nil
-            videoOutput.setSampleBufferDelegate(self, queue: sessionQueue)
-        }
-
-        // Deliver upright buffers so Vision, the motion gate and the overlay all share one space.
-        DispatchQueue.main.async { self.observeSessionHealth() }
-        rebuildRotationCoordinator()
-
-        // Mirroring must be identical on the preview and on the frames Vision
-        // sees, or the boxes are horizontally flipped on the front camera. Pin
-        // both to un-mirrored so the two spaces always agree.
-        for c in [videoOutput.connection(with: .video), previewLayer?.connection].compactMap({ $0 }) {
-            if c.isVideoMirroringSupported {
-                c.automaticallyAdjustsVideoMirroring = false
-                c.isVideoMirrored = false
-            }
-        }
 
         try? cam.lockForConfiguration()
         if cam.isFocusModeSupported(.continuousAutoFocus) { cam.focusMode = .continuousAutoFocus }
         if cam.isExposureModeSupported(.continuousAutoExposure) { cam.exposureMode = .continuousAutoExposure }
         if cam.isLowLightBoostSupported { cam.automaticallyEnablesLowLightBoostWhenAvailable = true }
-        cam.videoZoomFactor = max(1.0, min(CGFloat(settings.zoomFactor), cam.maxAvailableVideoZoomFactor))
+        cam.videoZoomFactor = max(cam.minAvailableVideoZoomFactor,
+                                  min(CGFloat(settings.zoomFactor), cam.maxAvailableVideoZoomFactor))
         cam.unlockForConfiguration()
 
         DispatchQueue.main.async {
