@@ -374,9 +374,19 @@ final class DetectionEngine: NSObject, ObservableObject {
 
     /// Swap between the front and back camera without tearing the session down.
     func flipCamera() {
-        sessionQueue.async { [weak self] in
+        // Settings is a @Published ObservableObject: mutating it off the main
+        // thread is undefined and silently did nothing when the flip arrived
+        // from another device.
+        DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.settings.useFrontCamera.toggle()
+            self.performFlip()
+        }
+    }
+
+    private func performFlip() {
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
             self.session.beginConfiguration()
             for input in self.session.inputs { self.session.removeInput(input) }
             self.attachCamera()

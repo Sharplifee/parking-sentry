@@ -15,8 +15,12 @@ final class RemoteControl: ObservableObject {
         didSet {
             guard stealth != oldValue else { return }
             if stealth {
-                priorBrightness = UIScreen.main.brightness
+                // Remember a sane value: if the screen is already at zero from a
+                // previous blackout, restoring to zero later looks like a hang.
+                let current = UIScreen.main.brightness
+                priorBrightness = current > 0.05 ? current : 0.6
                 UIScreen.main.brightness = 0
+                UIApplication.shared.isIdleTimerDisabled = true
             } else {
                 UIScreen.main.brightness = priorBrightness
             }

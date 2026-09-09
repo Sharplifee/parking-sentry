@@ -70,7 +70,11 @@ struct VideoWallView: View {
     private func tile(_ p: MCPeerID, big: Bool = false) -> some View {
         ZStack(alignment: .bottomLeading) {
             if let img = mesh.frames[p] {
-                Image(uiImage: img).resizable().scaledToFill().clipped()
+                Image(uiImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
             } else {
                 Rectangle().fill(Color(white: 0.1)).aspectRatio(16.0/10.0, contentMode: .fit)
                     .overlay(
@@ -99,14 +103,10 @@ struct VideoWallView: View {
             }
         }
         .frame(maxWidth: .infinity)
+        .aspectRatio(16.0 / 9.0, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: big ? 0 : 10))
+        .contentShape(Rectangle())
         .overlay(alignment: .bottomTrailing) { armButton(p) }
-        // Press and hold anywhere on a tile to talk into that device.
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in if mesh.talkingTo != p { mesh.beginTalking(to: p) } }
-                .onEnded { _ in mesh.endTalking() }
-        )
     }
 
     private func armButton(_ p: MCPeerID) -> some View {
@@ -131,6 +131,17 @@ struct VideoWallView: View {
                 Image(systemName: "moon.circle")
                     .padding(9).background(.ultraThinMaterial, in: Circle())
             }
+
+            Image(systemName: mesh.talkingTo == p ? "mic.fill" : "mic")
+                .padding(9)
+                .background(mesh.talkingTo == p ? AnyShapeStyle(Color.red)
+                                                : AnyShapeStyle(.ultraThinMaterial),
+                            in: Circle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { _ in if mesh.talkingTo != p { mesh.beginTalking(to: p) } }
+                        .onEnded { _ in mesh.endTalking() }
+                )
         }
         .foregroundStyle(.white).padding(8)
     }
@@ -146,7 +157,7 @@ struct VideoWallView: View {
     private var bottomBar: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Label("Hold a tile to talk", systemImage: "mic.fill")
+                Label("Hold the mic button to talk", systemImage: "mic.fill")
                     .font(.caption).foregroundStyle(.white.opacity(0.6))
                 Text("sent \(mesh.framesSent) · received \(mesh.framesReceived)")
                     .font(.system(size: 10, design: .monospaced))
