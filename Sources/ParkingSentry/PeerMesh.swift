@@ -27,6 +27,14 @@ final class PeerMesh: NSObject, ObservableObject {
     @Published private(set) var statusLines: [MCPeerID: String] = [:]
     @Published private(set) var lastFrameAt: [MCPeerID: Date] = [:]
     @Published private(set) var running = false
+    /// Peers seen by the browser, whether or not a session formed. The gap
+    /// between this and `peers` is the whole diagnosis: nothing here means
+    /// discovery is blocked (local network permission, Wi-Fi off, wrong
+    /// network); entries here with no `peers` means invites are failing.
+    @Published private(set) var found: [MCPeerID] = []
+    @Published private(set) var advertiseError: String?
+    @Published private(set) var browseError: String?
+    @Published private(set) var lastInviteAt: Date?
     @Published private(set) var framesSent = 0
     @Published private(set) var framesReceived = 0
     @Published var talkingTo: MCPeerID?
@@ -50,6 +58,7 @@ final class PeerMesh: NSObject, ObservableObject {
 
     private var advertiser: MCNearbyServiceAdvertiser?
     private var browser: MCNearbyServiceBrowser?
+    private var retryTimer: Timer?
 
     // Video pacing
     private var lastFrameSent = Date.distantPast
@@ -86,13 +95,43 @@ final class PeerMesh: NSObject, ObservableObject {
         browser = b
 
         running = true
+        startRetryLoop()
+    }
+
+    /// Tear everything down and build it again. Needed because a browser that
+    /// failed to start — most often because local network permission had not
+    /// been granted yet — stays dead forever otherwise, and `running` used to
+    /// be set to true regardless of whether browsing actually began.
+    func restart() {
+        stop()
+        advertiseError = nil
+        browseError = nil
+        start()
+    }
+
+    /// An invitation can be lost, refused, or race another one. Re-invite any
+    /// peer we can see but are not connected to.
+    private func startRetryLoop() {
+        retryTimer?.invalidate()
+        retryTimer = Timer.scheduledTimer(withTimeInterval: 6, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.running else { return }
+                let connected = Set(self.session.connectedPeers.map(\.displayName))
+                for peer in self.found where !connected.contains(peer.displayName) {
+                    self.browser?.invitePeer(peer, to: self.session, withContext: nil, timeout: 20)
+                    self.lastInviteAt = Date()
+                }
+            }
+        }
     }
 
     func stop() {
+        retryTimer?.invalidate(); retryTimer = nil
         advertiser?.stopAdvertisingPeer(); advertiser = nil
         browser?.stopBrowsingForPeers(); browser = nil
         session.disconnect()
         running = false
+        found = []
         peers = []
         frames = [:]
         endTalking()
@@ -312,7 +351,10 @@ extension PeerMesh: MCNearbyServiceAdvertiserDelegate {
     }
 
     nonisolated func advertiser(_ a: MCNearbyServiceAdvertiser, didNotStartAdvertisingPeer error: Error) {
-        print("advertise failed: \(error.localizedDescription)")
+        Task { @MainActor in
+            self.advertiseError = error.localizedDescription
+            self.running = false
+        }
     }
 }
 
@@ -320,32 +362,43 @@ extension PeerMesh: MCNearbyServiceBrowserDelegate {
     nonisolated func browser(_ b: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID,
                              withDiscoveryInfo info: [String: String]?) {
         Task { @MainActor in
+            if !self.found.contains(peerID) { self.found.append(peerID) }
             guard !self.session.connectedPeers.contains(peerID) else { return }
 
-            // Both sides browse, so without a tiebreak both invite and one
-            // session is torn down mid-handshake. Break on the stable per-install
-            // id carried in discoveryInfo — NOT on displayName, which iOS reports
-            // generically ("iPad", "iPhone") and which is identical across two
-            // devices of the same model, leaving nobody to invite.
+            // Previously the lower id invited and the higher one stayed silent.
+            // If that invite is dropped — and on a busy network it is — nobody
+            // ever tries again and the two sit two feet apart doing nothing.
+            // Now the lower id invites immediately and the higher one waits only
+            // briefly before inviting too; a duplicate invite is harmless, a
+            // missed one is fatal.
             let mine = MeshClient.deviceKey
-            if let theirs = info?["uid"] {
-                guard mine < theirs else { return }
+            let theirs = info?["uid"] ?? ""
+            let delay: TimeInterval = (theirs.isEmpty || mine < theirs) ? 0 : 3
+            self.lastInviteAt = Date()
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                Task { @MainActor in
+                    guard !self.session.connectedPeers.contains(peerID) else { return }
+                    b.invitePeer(peerID, to: self.session, withContext: nil, timeout: 20)
+                }
             }
-            // No id advertised (older build on the other device): invite anyway
-            // rather than sit silent. A duplicate invite is recoverable; a
-            // missed one is not.
-            b.invitePeer(peerID, to: self.session, withContext: nil, timeout: 20)
         }
     }
 
     nonisolated func browser(_ b: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {
         Task { @MainActor in
+            self.found.removeAll { $0 == peerID }
             self.peers = self.session.connectedPeers
             self.frames[peerID] = nil
         }
     }
 
     nonisolated func browser(_ b: MCNearbyServiceBrowser, didNotStartBrowsingForPeers error: Error) {
-        print("browse failed: \(error.localizedDescription)")
+        Task { @MainActor in
+            self.browseError = error.localizedDescription
+            // A browser that failed to start never recovers on its own, and
+            // this is what happens when local network permission is refused or
+            // still pending at launch. Mark the link down so a retry is possible.
+            self.running = false
+        }
     }
 }
