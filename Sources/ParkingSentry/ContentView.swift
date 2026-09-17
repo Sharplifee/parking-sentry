@@ -229,7 +229,6 @@ struct ContentView: View {
 struct EventLogView: View {
     @EnvironmentObject var engine: DetectionEngine
     @Environment(\.dismiss) private var dismiss
-    @State private var playingClip: URL?
     @State private var playing: URL?
 
     var body: some View {
