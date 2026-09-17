@@ -19,7 +19,7 @@ struct SettingsView: View {
                 Section("Camera") {
                     Toggle("Night view (depth)", isOn: $settings.nightView)
                     Text(engine.depthAvailable
-                         ? "Renders what the depth sensor sees instead of the colour image. It works in total darkness because the sensor lights the scene with its own infrared, and unlike the camera it is not fooled by shadows. Range is a few metres — it is for a doorway, not a parking lot."
+                         ? "Renders what the depth sensor sees instead of the colour image. It works in total darkness because the sensor lights the scene with its own infrared, and unlike the camera it is not fooled by shadows. Range is about 15 ft — it is for a doorway, not a parking lot."
                          : "This device has no depth sensor, so night view is unavailable here. iOS gives apps no access to a raw infrared image on any device.")
                         .font(.caption).foregroundStyle(.secondary)
                     Toggle("Front camera", isOn: $settings.useFrontCamera)
