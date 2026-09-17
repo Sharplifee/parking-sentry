@@ -65,7 +65,7 @@ struct SettingsView: View {
                            range: 1.4...2.0,
                            step: settings.useMetric ? 0.01 : 0.0254,   // 1 inch
                            format: { Units.height($0) })
-                    Text("Vehicles are ranged from width rather than height, using standard widths per class. Anything with no known real-world size reports range unknown instead of a guess.")
+                    Text("Vehicles are ranged from width rather than height, using standard widths per class. Anything with no known real-world size reports range unknown instead of a guess. Distances show in feet, switching to miles past 1,000 ft; heights show in feet and inches.")
                         .font(.caption).foregroundStyle(.secondary)
                     Text(engine.depthAvailable
                          ? "LiDAR gives true range under about 16 ft; beyond that the app falls back to an optical estimate from apparent height."
