@@ -183,6 +183,26 @@ final class ClipRecorder {
         }
     }
 
+    /// Space used, device space left, and how many clips there are. Without the
+    /// free-space half, a recording folder grows invisibly until the device is
+    /// full and the camera starts failing for reasons nobody connects to video.
+    static func storageReport() -> (used: Int64, free: Int64, count: Int) {
+        let clips = existingClips()
+        let used = clips.reduce(Int64(0)) { total, url in
+            total + Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        }
+        let free = (try? URL(fileURLWithPath: NSHomeDirectory())
+            .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
+            .volumeAvailableCapacityForImportantUsage ?? 0
+        return (used, free, clips.count)
+    }
+
+    /// Delete every saved clip.
+    static func deleteAll() {
+        let fm = FileManager.default
+        for url in existingClips() { try? fm.removeItem(at: url) }
+    }
+
     static func prune(keeping limit: Int = Settings.shared.clipRetention) {
         let fm = FileManager.default
         for old in existingClips().dropFirst(limit) { try? fm.removeItem(at: old) }
