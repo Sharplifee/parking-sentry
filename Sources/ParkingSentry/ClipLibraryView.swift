@@ -6,6 +6,7 @@ struct ClipLibraryView: View {
     @EnvironmentObject var engine: DetectionEngine
     @Environment(\.dismiss) private var dismiss
     @State private var playing: URL?
+    @State private var storage: (used: Int64, free: Int64, count: Int) = (0, 0, 0)
 
     var body: some View {
         NavigationStack {
@@ -16,6 +17,25 @@ struct ClipLibraryView: View {
                         description: Text("A clip is saved automatically each time something is detected, starting a few seconds before the trigger."))
                 } else {
                     List {
+                        Section {
+                            let r = storage
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(ByteCountFormatter.string(fromByteCount: r.used, countStyle: .file)
+                                         + " in \(r.count) recordings")
+                                        .font(.subheadline.weight(.semibold))
+                                    Text(ByteCountFormatter.string(fromByteCount: r.free, countStyle: .file)
+                                         + " free on this device")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Button(role: .destructive) { deleteAll() } label: {
+                                    Text("Delete all").font(.caption)
+                                }
+                            }
+                            Text("Oldest recordings are removed automatically once the keep-limit in Settings is reached.")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
                         ForEach(engine.clipURLs, id: \.self) { url in
                             Button { playing = url } label: {
                                 VStack(alignment: .leading, spacing: 3) {
@@ -35,6 +55,7 @@ struct ClipLibraryView: View {
                 }
             }
             .navigationTitle("Recordings")
+            .onAppear { storage = ClipRecorder.storageReport() }
             .safeAreaInset(edge: .bottom) {
                 if !engine.clipURLs.isEmpty {
                     HStack {
@@ -72,6 +93,13 @@ struct ClipLibraryView: View {
     private func delete(_ url: URL) {
         try? FileManager.default.removeItem(at: url)
         engine.clipURLs.removeAll { $0 == url }
+        storage = ClipRecorder.storageReport()
+    }
+
+    private func deleteAll() {
+        ClipRecorder.deleteAll()
+        engine.clipURLs.removeAll()
+        storage = ClipRecorder.storageReport()
     }
 }
 
