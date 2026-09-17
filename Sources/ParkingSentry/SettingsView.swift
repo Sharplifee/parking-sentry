@@ -68,7 +68,7 @@ struct SettingsView: View {
                     Text("Vehicles are ranged from width rather than height, using standard widths per class. Anything with no known real-world size reports range unknown instead of a guess.")
                         .font(.caption).foregroundStyle(.secondary)
                     Text(engine.depthAvailable
-                         ? "LiDAR gives true range under about 5 m; beyond that the app falls back to an optical estimate from apparent height."
+                         ? "LiDAR gives true range under about 16 ft; beyond that the app falls back to an optical estimate from apparent height."
                          : "No depth sensor on this camera, so range comes from apparent height and the lens's own focal length. Typical error is 10 to 15 percent for a fully visible standing person.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
