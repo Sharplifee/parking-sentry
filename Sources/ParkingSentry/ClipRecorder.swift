@@ -12,8 +12,10 @@ import UIKit
 /// crashed on arming.
 final class ClipRecorder {
 
-    private let preRoll: TimeInterval = 6
-    private let postRoll: TimeInterval = 8
+    /// Read live from Settings rather than captured once: these are sliders the
+    /// user can move, and as constants they made both of them do nothing.
+    private var preRoll: TimeInterval { Settings.shared.clipPreRoll }
+    private var postRoll: TimeInterval { Settings.shared.clipPostRoll }
     /// Pre-roll frame rate, from the power budget. Encoding a JPEG per frame
     /// for hours is a real cost even when nothing is ever detected.
     private var fps: Double { max(3, PowerManager.clipFPSSnapshot) }
