@@ -31,6 +31,9 @@ final class ClipRecorder {
     private var lastAccepted: TimeInterval = -1
 
     var onClipFinished: ((URL) -> Void)?
+    /// Fires as soon as the file is opened, so an event can show "recording…"
+    /// rather than waiting the full post-roll before it links.
+    var onClipAssigned: ((UUID, URL) -> Void)?
 
     static var clipsDirectory: URL {
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -70,7 +73,11 @@ final class ClipRecorder {
         }
     }
 
-    func trigger(label: String) {
+    /// Identifier of the detection that opened the current clip, so the event
+    /// list can point at the right file once writing finishes.
+    private var currentTag: UUID?
+
+    func trigger(label: String, tag: UUID) {
         queue.async { [weak self] in
             guard let self else { return }
             if self.recordingUntil != nil {

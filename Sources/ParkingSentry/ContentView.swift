@@ -1,4 +1,5 @@
 import SwiftUI
+import AVKit
 
 struct ContentView: View {
     @EnvironmentObject var engine: DetectionEngine
@@ -228,6 +229,7 @@ struct ContentView: View {
 struct EventLogView: View {
     @EnvironmentObject var engine: DetectionEngine
     @Environment(\.dismiss) private var dismiss
+    @State private var playing: URL?
 
     var body: some View {
         NavigationStack {
@@ -242,8 +244,19 @@ struct EventLogView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(e.date.formatted(date: .omitted, time: .standard)).font(.headline)
                         Text(e.text).font(.caption).foregroundStyle(.secondary)
+                        if let url = e.clipURL {
+                            Button { playing = url } label: {
+                                Label("Watch recording", systemImage: "play.circle.fill")
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.blue)
+                        }
                     }
                 }
+            }
+            .sheet(item: $playing) { url in
+                VideoPlayer(player: AVPlayer(url: url)).ignoresSafeArea()
             }
             .navigationTitle("Detections")
             .toolbar {

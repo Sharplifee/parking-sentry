@@ -5,12 +5,14 @@ import UIKit
 import Combine
 
 struct SentryEvent: Identifiable {
-    let id = UUID()
+    let id: UUID
     let date: Date
     let text: String
     let rangeMeters: Double?
     let thumbnail: UIImage?
     let alerted: Bool
+    /// The recording this detection produced, once it exists.
+    var clipURL: URL?
 }
 
 struct BoxOverlay: Identifiable {
@@ -115,7 +117,12 @@ final class DetectionEngine: NSObject, ObservableObject {
         }
         ClipRecorder.prune()
         clips.onClipFinished = { [weak self] url in
-            self?.clipURLs.insert(url, at: 0)
+            guard let self else { return }
+            if !self.clipURLs.contains(url) { self.clipURLs.insert(url, at: 0) }
+        }
+        clips.onClipAssigned = { [weak self] tag, url in
+            guard let self, let i = self.events.firstIndex(where: { $0.id == tag }) else { return }
+            self.events[i].clipURL = url
         }
         clipURLs = ClipRecorder.existingClips()
         modelStatus = detector.modelLoaded
@@ -704,7 +711,8 @@ final class DetectionEngine: NSObject, ObservableObject {
         let body = "\(rangeText)\(speedText)\(approachText)\(heightText) · \(Int(audio.currentDB)) dB · "
             + "\(Int(track.bestConfidence * 100))% confidence · \(rangeSourceLabel) range"
 
-        clips.trigger(label: track.label)
+        let eventID = UUID()
+        clips.trigger(label: track.label, tag: eventID)
 
         let jpeg = snapshotJPEG(from: pixelBuffer)
         AlertManager.shared.fire(title: title, body: body, snapshot: jpeg, settings: settings)
@@ -722,7 +730,8 @@ final class DetectionEngine: NSObject, ObservableObject {
         let image = jpeg.flatMap { UIImage(data: $0) }
         DispatchQueue.main.async {
             self.status = "ALERT · \(track.label.capitalized) · \(rangeText)"
-            self.events.insert(SentryEvent(date: Date(),
+            self.events.insert(SentryEvent(id: eventID,
+                                           date: Date(),
                                            text: body,
                                            rangeMeters: range,
                                            thumbnail: image,
