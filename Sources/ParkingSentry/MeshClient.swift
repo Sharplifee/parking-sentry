@@ -240,8 +240,13 @@ struct MeshEvent: Identifiable, Decodable {
 
     var summary: String {
         var parts: [String] = [label.capitalized]
-        if let r = rangeM { parts.append(String(format: "%.0f m", r)) }
-        if let s = speedMph, s > 0.3 { parts.append(String(format: "%.0f mph", s)) }
+        if let r = rangeM { parts.append(Units.distance(r)) }
+        // speedMph already arrives in mph over the wire; convert back only when
+        // the reader wants metric, so the units setting still governs the label.
+        if let s = speedMph, s > 0.3 {
+            parts.append(Units.useMetric ? String(format: "%.0f km/h", s * 1.60934)
+                                         : String(format: "%.0f mph", s))
+        }
         if closing == true { parts.append("closing") }
         if let db = soundDb { parts.append(String(format: "%.0f dB", db)) }
         return parts.joined(separator: " · ")

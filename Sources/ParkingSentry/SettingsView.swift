@@ -54,10 +54,17 @@ struct SettingsView: View {
                 }
 
                 Section("Range") {
-                    slider("Alert within", value: $settings.alertDistanceMeters, range: 0...80, step: 1,
-                           format: { $0 == 0 ? "any distance" : String(format: "%.0f m", $0) })
-                    slider("Assumed person height", value: $settings.subjectHeightMeters, range: 1.4...2.0, step: 0.01,
-                           format: { String(format: "%.2f m", $0) })
+                    // Step in whole feet when showing feet, whole metres when
+                    // showing metres — otherwise dragging lands on 23 ft, 26 ft
+                    // and never on a round number anyone would choose.
+                    slider("Alert within", value: $settings.alertDistanceMeters,
+                           range: 0...80,
+                           step: settings.useMetric ? 1 : 0.3048,
+                           format: { $0 == 0 ? "any distance" : Units.distance($0) })
+                    slider("Assumed person height", value: $settings.subjectHeightMeters,
+                           range: 1.4...2.0,
+                           step: settings.useMetric ? 0.01 : 0.0254,   // 1 inch
+                           format: { Units.height($0) })
                     Text("Vehicles are ranged from width rather than height, using standard widths per class. Anything with no known real-world size reports range unknown instead of a guess.")
                         .font(.caption).foregroundStyle(.secondary)
                     Text(engine.depthAvailable
