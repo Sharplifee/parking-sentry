@@ -94,5 +94,9 @@ final class Settings: ObservableObject {
         // down and step away, and the dial goes to zero for immediate arming.
         armDelaySeconds      = dbl("armDelaySeconds", 5.0)
         useMetric            = bool("useMetric", false)
+        recordClips          = bool("recordClips", true)
+        clipPreRoll          = dbl("clipPreRoll", 6.0)
+        clipPostRoll         = dbl("clipPostRoll", 8.0)
+        clipRetention        = int("clipRetention", 200)
     }
 }
