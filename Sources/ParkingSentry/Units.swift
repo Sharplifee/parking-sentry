@@ -1,37 +1,43 @@
 import Foundation
 
-/// Every distance, height and speed the app shows goes through here.
-/// Defaults to US customary — feet and miles per hour — because that is what
-/// gets read on the screen; metric stays available for anyone who wants it.
+/// US customary throughout: feet for distance, switching to miles past ~1000 ft,
+/// feet-and-inches for heights, mph for speed. The detection maths runs in
+/// metres because the camera intrinsics are metric; only display converts.
 enum Units {
-    static var useMetric: Bool {
-        get { UserDefaults.standard.bool(forKey: "useMetric") }
-        set { UserDefaults.standard.set(newValue, forKey: "useMetric") }
-    }
 
-    /// Range or height. Metres in, display string out.
     static func distance(_ meters: Double) -> String {
-        if useMetric { return String(format: "%.0f m", meters) }
         let feet = meters * 3.28084
-        return feet < 1000 ? String(format: "%.0f ft", feet)
-                           : String(format: "%.2f mi", feet / 5280)
+        if feet >= 1000 {
+            return String(format: "%.1f mi", feet / 5280)
+        }
+        return String(format: "%.0f ft", feet)
     }
 
-    /// Subject height, where inches matter more than they do for range.
+    /// Short form for cramped places like an overlay label.
+    static func distanceShort(_ meters: Double) -> String {
+        let feet = meters * 3.28084
+        return feet >= 1000 ? String(format: "%.1fmi", feet / 5280)
+                            : String(format: "%.0fft", feet)
+    }
+
+    /// Heights read naturally as feet and inches — "6 ft 1 in", not "1.85 m".
     static func height(_ meters: Double) -> String {
-        if useMetric { return String(format: "%.1f m", meters) }
-        let totalInches = meters * 39.3701
-        let ft = Int(totalInches / 12)
-        let inch = Int(totalInches.truncatingRemainder(dividingBy: 12).rounded())
-        return inch == 12 ? "\(ft + 1)'0\"" : "\(ft)'\(inch)\""
+        let totalInches = (meters * 39.3701).rounded()
+        let ft = Int(totalInches) / 12
+        let inch = Int(totalInches) % 12
+        return inch == 0 ? "\(ft) ft" : "\(ft) ft \(inch) in"
     }
 
-    /// Speed. Metres per second in.
-    static func speed(_ mps: Double) -> String {
-        useMetric ? String(format: "%.0f km/h", mps * 3.6)
-                  : String(format: "%.0f mph", mps * 2.23694)
+    static func heightShort(_ meters: Double) -> String {
+        let totalInches = (meters * 39.3701).rounded()
+        return "\(Int(totalInches) / 12)'\(Int(totalInches) % 12)\""
     }
 
-    /// Label for the assumed-person-height slider.
-    static func heightSetting(_ meters: Double) -> String { height(meters) }
+    static func speed(_ metersPerSecond: Double) -> String {
+        String(format: "%.0f mph", metersPerSecond * 2.23694)
+    }
+
+    // Settings sliders are stored in metres; these convert at the edges.
+    static func metersFromFeet(_ feet: Double) -> Double { feet / 3.28084 }
+    static func feetFromMeters(_ meters: Double) -> Double { meters * 3.28084 }
 }

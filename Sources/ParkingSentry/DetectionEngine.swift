@@ -57,6 +57,7 @@ final class DetectionEngine: NSObject, ObservableObject {
     /// made an iPad look identical to a working device that just saw darkness.
     @Published var cameraProblem: String?
     @Published var clipURLs: [URL] = []
+    private var eventsAwaitingClip: [UUID] = []
     @Published var usingFrontCamera = false
     @Published var zoom: CGFloat = 1
     @Published var minZoom: CGFloat = 1
