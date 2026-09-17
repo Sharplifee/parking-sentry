@@ -1,6 +1,5 @@
 import SwiftUI
 import AVKit
-import AVKit
 
 struct ContentView: View {
     @EnvironmentObject var engine: DetectionEngine
