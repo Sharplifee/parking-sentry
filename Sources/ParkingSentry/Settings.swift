@@ -51,6 +51,17 @@ final class Settings: ObservableObject {
     /// e.g. https://ntfy.sh/your-private-topic  — POSTed so a phone in your pocket buzzes.
     @Published var webhookURL: String { didSet { d.set(webhookURL, forKey: "webhookURL") } }
     @Published var cooldownSeconds: Double { didSet { d.set(cooldownSeconds, forKey: "cooldownSeconds") } }
+    // MARK: Recording
+    /// Save a clip on every confirmed detection.
+    @Published var recordClips: Bool { didSet { d.set(recordClips, forKey: "recordClips") } }
+    /// Seconds kept from BEFORE the trigger. This is the part that shows the
+    /// approach, so it matters more than the tail.
+    @Published var clipPreRoll: Double { didSet { d.set(clipPreRoll, forKey: "clipPreRoll") } }
+    /// Seconds recorded after the trigger.
+    @Published var clipPostRoll: Double { didSet { d.set(clipPostRoll, forKey: "clipPostRoll") } }
+    /// How many clips to keep before the oldest are deleted.
+    @Published var clipRetention: Int { didSet { d.set(clipRetention, forKey: "clipRetention") } }
+
     /// Grace period after arming so you can walk out of frame.
     @Published var armDelaySeconds: Double { didSet { d.set(armDelaySeconds, forKey: "armDelaySeconds") } }
     /// Feet and miles per hour by default; metric is opt-in.

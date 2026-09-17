@@ -104,6 +104,27 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
+                Section("Recording") {
+                    Toggle("Save a clip for each detection", isOn: $settings.recordClips)
+                    if settings.recordClips {
+                        slider("Seconds before", value: $settings.clipPreRoll, range: 2...20, step: 1,
+                               format: { String(format: "%.0f s", $0) })
+                        slider("Seconds after", value: $settings.clipPostRoll, range: 2...30, step: 1,
+                               format: { String(format: "%.0f s", $0) })
+                        Stepper("Keep \(settings.clipRetention) clips",
+                                value: $settings.clipRetention, in: 25...500, step: 25)
+                        HStack {
+                            Text("Using now")
+                            Spacer()
+                            Text(ByteCountFormatter.string(fromByteCount: ClipRecorder.storageUsed(),
+                                                           countStyle: .file))
+                                .foregroundStyle(.secondary).monospacedDigit()
+                        }
+                        Text("Seconds before the trigger is the part worth having — by the time something is confirmed it has already walked into frame.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+
                 Section {
                     Button("Apply camera changes and re-arm") {
                         engine.restartForSettingsChange()

@@ -174,7 +174,14 @@ final class ClipRecorder {
         }
     }
 
-    static func prune(keeping limit: Int = 200) {
+    /// Total bytes the clip folder is using right now.
+    static func storageUsed() -> Int64 {
+        existingClips().reduce(0) { total, url in
+            total + Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        }
+    }
+
+    static func prune(keeping limit: Int = Settings.shared.clipRetention) {
         let fm = FileManager.default
         for old in existingClips().dropFirst(limit) { try? fm.removeItem(at: old) }
     }

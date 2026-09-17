@@ -588,7 +588,7 @@ final class DetectionEngine: NSObject, ObservableObject {
         // Rolling pre-roll buffer: fed always while armed so a clip can start
         // seconds BEFORE the trigger. A clip that begins at the detection has
         // already missed the approach, which is the part worth seeing.
-        if isRunning { clips.ingest(sampleBuffer) }
+        if isRunning, settings.recordClips { clips.ingest(sampleBuffer) }
 
         ranger.updateIntrinsics(from: sampleBuffer,
                                 bufferWidth: CVPixelBufferGetWidth(pixelBuffer),

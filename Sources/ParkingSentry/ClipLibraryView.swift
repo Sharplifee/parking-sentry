@@ -35,6 +35,19 @@ struct ClipLibraryView: View {
                 }
             }
             .navigationTitle("Recordings")
+            .safeAreaInset(edge: .bottom) {
+                if !engine.clipURLs.isEmpty {
+                    HStack {
+                        Text("\(engine.clipURLs.count) clips")
+                        Spacer()
+                        Text(ByteCountFormatter.string(fromByteCount: ClipRecorder.storageUsed(),
+                                                       countStyle: .file))
+                    }
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(.horizontal).padding(.vertical, 8)
+                    .background(.bar)
+                }
+            }
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
             .sheet(item: $playing) { url in
                 VideoPlayer(player: AVPlayer(url: url)).ignoresSafeArea()
