@@ -5,10 +5,12 @@ struct ContentView: View {
     @EnvironmentObject var engine: DetectionEngine
     @EnvironmentObject var settings: Settings
     @ObservedObject private var peers = PeerMesh.shared
+    @ObservedObject private var router = AlertRouter.shared
     @State private var showSettings = false
     @State private var showLog = false
     @State private var showMesh = false
     @State private var showClips = false
+    @State private var showWelcome = !UserDefaults.standard.bool(forKey: "hasSeenWelcome")
     @State private var showWall = false
     @ObservedObject private var remote = RemoteControl.shared
     @ObservedObject private var power = PowerManager.shared
@@ -92,6 +94,10 @@ struct ContentView: View {
         }
         .fullScreenCover(isPresented: $showWall) { VideoWallView() }
         .sheet(isPresented: $showClips) { ClipLibraryView().environmentObject(engine) }
+        .fullScreenCover(isPresented: $showWelcome) { WelcomeView() }
+        .onChange(of: router.openRecordings) { _, open in
+            if open { showClips = true; router.openRecordings = false }
+        }
     }
 
     private func enterStealth() {

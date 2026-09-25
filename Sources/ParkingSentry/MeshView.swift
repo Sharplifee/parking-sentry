@@ -118,6 +118,9 @@ struct MeshView: View {
                 TextField("Name", text: $draftName)
                 Button("Save") {
                     mesh.deviceName = draftName
+                    // Rebuild the peer identity so other devices see the new
+                    // name now rather than after a force-quit.
+                    PeerMesh.shared.renamed(to: draftName)
                     mesh.heartbeat(armed: engine.isArmed,
                                    soundDB: engine.soundLevelDB,
                                    ambientDB: engine.ambientDB)

@@ -41,20 +41,45 @@ final class PeerMesh: NSObject, ObservableObject {
     /// Stop putting this device's own camera on the wire without stopping detection.
     @Published var sharesCamera = true
 
-    private lazy var peerID: MCPeerID = {
+    /// Rebuild identity and reconnect under a new name. MCPeerID is immutable
+    /// and baked into the session, so a rename has to tear the whole link down
+    /// and stand it back up — otherwise the old name stays on the network until
+    /// the app is force-quit, and peers show a name you already changed.
+    func renamed(to newName: String) {
+        MeshClient.shared.deviceName = newName
+        let wasRunning = running
+        stop()
+        _session = nil
+        _peerID = nil
+        if wasRunning { start() }
+    }
+
+    private var _peerID: MCPeerID?
+    private var _session: MCSession?
+
+    private var peerID: MCPeerID {
+        if let p = _peerID { return p }
+        let p = Self.makePeerID()
+        _peerID = p
+        return p
+    }
+
+    private static func makePeerID() -> MCPeerID {
         let raw = MeshClient.shared.deviceName
         var name = raw.isEmpty ? UIDevice.current.name : raw
         // Two same-model devices otherwise show up as one indistinguishable
         // entry; a short suffix off the stable id keeps them apart on screen.
         name += " " + MeshClient.deviceKey.suffix(4)
         return MCPeerID(displayName: String(name.prefix(63)))
-    }()
+    }
 
-    private lazy var session: MCSession = {
+    private var session: MCSession {
+        if let s = _session { return s }
         let s = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .required)
         s.delegate = self
+        _session = s
         return s
-    }()
+    }
 
     private var advertiser: MCNearbyServiceAdvertiser?
     private var browser: MCNearbyServiceBrowser?

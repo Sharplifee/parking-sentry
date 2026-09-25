@@ -3,7 +3,14 @@ import AVFoundation
 import UserNotifications
 import UIKit
 
-final class AlertManager {
+/// Routed when a detection notification is tapped, so the UI can jump to it.
+@MainActor final class AlertRouter: ObservableObject {
+    static let shared = AlertRouter()
+    /// Set when a notification is opened; the UI observes and presents.
+    @Published var openRecordings = false
+}
+
+final class AlertManager: NSObject {
     static let shared = AlertManager()
 
     private var player: AVAudioPlayer?
@@ -11,12 +18,16 @@ final class AlertManager {
     private var lastGlobalAlert: Date = .distantPast
     private let globalCooldown: TimeInterval = 4
 
-    private init() {
+    private override init() {
+        super.init()
+        UNUserNotificationCenter.current().delegate = self
         // Deliberately does NOT set a category: a .playback category here
         // silently dropped the microphone, which killed sound metering and the
         // intercom the moment any alert fired.
     }
 
+    /// Detection alerts are worth interrupting for, so show them even while the
+    /// app is open — otherwise the operator watching one camera misses another.
     func requestNotificationPermission() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
     }
@@ -113,5 +124,22 @@ final class AlertManager {
             }
         }
         return data
+    }
+}
+
+extension AlertManager: UNUserNotificationCenterDelegate {
+    /// Without this, an alert raised while the app is foregrounded is silently
+    /// swallowed — exactly when you are watching one camera and another trips.
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification)
+        async -> UNNotificationPresentationOptions {
+        [.banner, .sound, .list]
+    }
+
+    /// Tapping an alert used to do nothing at all. Open the recordings, which is
+    /// the thing you actually wanted when the phone buzzed.
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse) async {
+        await MainActor.run { AlertRouter.shared.openRecordings = true }
     }
 }
