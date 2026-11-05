@@ -40,6 +40,21 @@ struct SettingsView: View {
                     Toggle("Wake on sudden sound", isOn: $settings.soundTrigger)
                 }
 
+                Section("Tinted glass") {
+                    Toggle("Look through tinted glass", isOn: Binding(
+                        get: { settings.glassMode },
+                        set: { engine.setGlassMode($0) }))
+                    slider("Amplification", value: $settings.glassGain, range: 10...60, step: 1,
+                           format: { String(format: "%.0f", $0) })
+                    slider("Call it occupied at", value: $settings.glassOccupiedThreshold,
+                           range: 0.1...0.7, step: 0.05,
+                           format: { String(format: "%.0f%% of the window", $0 * 100) })
+                    Text("For telling whether anyone is inside a car behind 5% limo tint. The camera locks a long exposure and high ISO so it exposes for the dark side of the glass instead of the sunlit body, then amplifies movement inside the box you draw. It does not identify people — through that much tint nothing can — it answers whether something in there is alive and moving, and it only says occupied after the movement has held for several seconds.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("There is no infrared option, on this or any iPhone or iPad: Apple fits an IR-cut filter over every camera, and modern ceramic films block 85–98% of near-infrared anyway. Daylight behind the car and glare on the pane are the two things that will beat this — shade the glass with your body or shoot from an angle.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
                 Section("Alert me about") {
                     ForEach(SubjectCategory.allCases, id: \.rawValue) { cat in
                         Toggle(cat.display, isOn: Binding(

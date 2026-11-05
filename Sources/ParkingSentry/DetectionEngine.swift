@@ -65,6 +65,24 @@ final class DetectionEngine: NSObject, ObservableObject {
     @Published var soundLevelDB: Float = 0
     @Published var ambientDB: Float = 0
 
+    // MARK: Through-glass occupancy
+    /// Amplified movement inside the drawn window, 0–1.
+    @Published var glassActivity: Double = 0
+    /// Fraction of the last few seconds that showed movement. This, not a
+    /// single frame, is what the verdict rests on.
+    @Published var glassSustained: Double = 0
+    /// This frame's change was one coherent sweep — a reflection, discarded.
+    @Published var glassGlare = false
+    /// Mean brightness inside the window, 0–1. Near zero means the exposure
+    /// lock is not opening the glass up and nothing can be recovered.
+    @Published var glassExposure: Double = 0
+    @Published var glassContrast: Double = 0
+    @Published var glassVerdict = "Draw a box over the window"
+    /// True once sustained movement clears the threshold.
+    @Published var glassOccupied = false
+    /// The window, stretched and with moving cells tinted. The thing to look at.
+    @Published var glassImage: UIImage?
+
 
     // MARK: Capture
     let session = AVCaptureSession()
@@ -92,6 +110,9 @@ final class DetectionEngine: NSObject, ObservableObject {
     private let audio = AudioMonitor()
     private let clips = ClipRecorder()
     private let tracker = Tracker()
+    private let glass = ThroughGlassAnalyzer()
+    private var lastGlassRender: Date = .distantPast
+    private var lastGlassAlert: Date = .distantPast
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
     private var settings: Settings { Settings.shared }
@@ -513,6 +534,15 @@ final class DetectionEngine: NSObject, ObservableObject {
         applyFrameRate(to: cam)
         cam.unlockForConfiguration()
 
+        // Re-apply after every attach: flipping the camera or changing a preset
+        // rebuilds the input and hands back a device on full auto-exposure,
+        // which would quietly turn the mode off while the UI still said it was on.
+        if settings.glassMode {
+            glass.reset()
+            ThroughGlassAnalyzer.configureCameraForGlass(cam, enabled: true,
+                                                         frameDuration: cam.activeVideoMinFrameDuration)
+        }
+
         DispatchQueue.main.async {
             self.usingFrontCamera = (cam.position == .front)
             self.minZoom = cam.minAvailableVideoZoomFactor
@@ -525,7 +555,12 @@ final class DetectionEngine: NSObject, ObservableObject {
     /// Clamp the sensor to the rate the current power budget allows. Must be
     /// called inside a lockForConfiguration block.
     private func applyFrameRate(to cam: AVCaptureDevice) {
-        let target = PowerManager.captureFPSSnapshot
+        var target = PowerManager.captureFPSSnapshot
+        // Through-glass needs a long exposure, and iOS will not let exposure
+        // exceed the frame duration. 15 fps buys 1/15 s of light collection,
+        // which is the whole point of the mode; movement inside a parked car
+        // does not need 30 fps to be seen.
+        if settings.glassMode { target = min(target, 15) }
         let ranges = cam.activeFormat.videoSupportedFrameRateRanges
         guard let range = ranges.first else { return }
         let fps = Double(max(Int(range.minFrameRate), min(target, Int(range.maxFrameRate))))
@@ -600,6 +635,16 @@ final class DetectionEngine: NSObject, ObservableObject {
         // PeerMesh throttles and downscales internally, so detection still gets
         // the full-resolution buffer.
         PeerMesh.shared.offer(frame: pixelBuffer, status: liveStatusLine())
+
+        // Through-glass occupancy replaces the whole detection pipeline rather
+        // than running alongside it: Vision has nothing to classify through 5%
+        // tint, and the motion gate is tuned to ignore exactly the sub-percent
+        // luminance changes this mode exists to find. It runs unarmed too, so
+        // you can point the device at a car and read it immediately.
+        if settings.glassMode {
+            handleGlass(pixelBuffer: pixelBuffer)
+            return
+        }
 
         // Idle: preview and streaming only. No gate, no Vision.
         guard isRunning else { return }
@@ -680,6 +725,151 @@ final class DetectionEngine: NSObject, ObservableObject {
         guard isArmed else { return }
         for t in tracks where t.misses == 0 {
             evaluateAlert(track: t, pixelBuffer: pixelBuffer)
+        }
+    }
+
+    // MARK: Through-glass occupancy
+
+    private func handleGlass(pixelBuffer: CVPixelBuffer) {
+        glass.gain = settings.glassGain
+        glass.region = settings.glassRegion
+        guard let r = glass.analyze(pixelBuffer: pixelBuffer) else { return }
+
+        // The verdict, in the order the failure modes actually occur. A dark
+        // readout is not "nobody home" — it is "this measurement is not
+        // happening yet", and saying so is the difference between a tool and a
+        // coin flip.
+        let threshold = settings.glassOccupiedThreshold
+        let occupied = r.sustained >= threshold && r.samples >= 45
+        var verdict: String
+        if r.exposureLevel < 0.015 {
+            verdict = "Too dark to read — move closer or add light"
+        } else if r.contrast < 0.01 {
+            verdict = "No detail through the glass — reframe or change angle"
+        } else if r.samples < 45 {
+            verdict = "Learning the window…"
+        } else if occupied {
+            verdict = "OCCUPIED · movement inside"
+        } else if r.sustained >= threshold * 0.4 {
+            verdict = "Possible movement — hold still and keep watching"
+        } else {
+            verdict = "No movement detected"
+        }
+        if r.glare { verdict += " · reflection ignored" }
+
+        // Rendering is the expensive part, so it runs at a few frames a second
+        // while the analysis runs on every frame.
+        var rendered: UIImage?
+        if Date().timeIntervalSince(lastGlassRender) > 0.2 {
+            lastGlassRender = Date()
+            if let cg = glass.enhancedImage(pixelBuffer: pixelBuffer) {
+                rendered = UIImage(cgImage: cg)
+            }
+        }
+
+        DispatchQueue.main.async {
+            self.glassActivity = r.activity
+            self.glassSustained = r.sustained
+            self.glassGlare = r.glare
+            self.glassExposure = r.exposureLevel
+            self.glassContrast = r.contrast
+            self.glassOccupied = occupied
+            self.glassVerdict = verdict
+            if let rendered { self.glassImage = rendered }
+            if self.isRunning { self.status = verdict }
+        }
+
+        guard isRunning, isArmed, occupied else { return }
+        guard Date().timeIntervalSince(lastGlassAlert) >= settings.cooldownSeconds else { return }
+        lastGlassAlert = Date()
+
+        let body = String(format: "movement inside the window · %.0f%% of the last %ds · exposure %.0f%%",
+                          r.sustained * 100, Int(Double(r.samples) / 15.0), r.exposureLevel * 100)
+        let eventID = UUID()
+        clips.trigger(label: "occupied", tag: eventID)
+        let jpeg = snapshotJPEG(from: pixelBuffer)
+        AlertManager.shared.fire(title: "Occupied vehicle", body: body,
+                                 snapshot: jpeg, settings: settings)
+
+        let draft = MeshEventDraft(label: "occupied vehicle",
+                                   category: SubjectCategory.person.rawValue,
+                                   confidence: Float(min(1, r.sustained)),
+                                   rangeMeters: nil,
+                                   rangeSource: nil,
+                                   speedMPH: nil,
+                                   closing: nil,
+                                   soundDB: audio.currentDB)
+        DispatchQueue.main.async {
+            MeshClient.shared.post(event: draft)
+            self.events.insert(SentryEvent(id: eventID,
+                                           date: Date(),
+                                           text: "Occupied vehicle · " + body,
+                                           rangeMeters: nil,
+                                           thumbnail: rendered ?? jpeg.flatMap { UIImage(data: $0) },
+                                           alerted: true), at: 0)
+            if self.events.count > 60 { self.events.removeLast() }
+        }
+        EventLog.action("glass.occupied", ["sustained": r.sustained, "exposure": r.exposureLevel])
+    }
+
+    /// Turn through-glass mode on or off. The camera has to be reconfigured
+    /// either way — the exposure lock is the mode, the analysis is just what
+    /// reads it — so this does the whole switch rather than only the flag.
+    func setGlassMode(_ on: Bool) {
+        settings.glassMode = on
+        // The analyzer's buffers belong to the session queue, so every reset
+        // goes through it. Clearing them from the main thread while a frame is
+        // mid-analysis is a crash, not a glitch.
+        sessionQueue.async { [weak self] in self?.glass.reset() }
+        DispatchQueue.main.async {
+            self.glassActivity = 0
+            self.glassSustained = 0
+            self.glassOccupied = false
+            self.glassImage = nil
+            self.glassVerdict = on ? "Learning the window…" : "Idle"
+            if !on { self.status = self.isArmed ? "Armed" : (self.isRunning ? "Watching" : "Idle") }
+        }
+        sessionQueue.async { [weak self] in
+            guard let self, let cam = self.device else { return }
+            // Frame rate first: iOS clamps exposure duration to the active
+            // frame duration, so locking 1/20 s at 30 fps silently does nothing.
+            try? cam.lockForConfiguration()
+            self.applyFrameRate(to: cam)
+            cam.unlockForConfiguration()
+            ThroughGlassAnalyzer.configureCameraForGlass(cam, enabled: on,
+                                                         frameDuration: cam.activeVideoMinFrameDuration)
+            EventLog.action("glass.mode", ["enabled": on])
+        }
+    }
+
+    /// Screen rect in the preview view's own coordinates → normalized
+    /// bottom-left rect the analyzer uses. Routed through the preview layer so
+    /// aspect-fill cropping and rotation are accounted for; drawing a box over
+    /// a window and having the analysis read a different part of the frame is
+    /// exactly the failure this avoids. Nil until the layer exists.
+    func visionRect(fromLayerRect r: CGRect) -> CGRect? {
+        guard let layer = previewLayer else { return nil }
+        let meta = layer.metadataOutputRectConverted(fromLayerRect: r)
+        return CGRect(x: meta.minX, y: 1 - meta.maxY, width: meta.width, height: meta.height)
+    }
+
+    func layerRect(fromVisionRect r: CGRect) -> CGRect? {
+        guard let layer = previewLayer else { return nil }
+        let meta = CGRect(x: r.minX, y: 1 - r.maxY, width: r.width, height: r.height)
+        return layer.layerRectConverted(fromMetadataOutputRect: meta)
+    }
+
+    func setGlassRegion(_ rect: CGRect) {
+        let clamped = CGRect(x: min(max(0, rect.minX), 0.95),
+                             y: min(max(0, rect.minY), 0.95),
+                             width: max(0.05, min(rect.width, 1 - min(max(0, rect.minX), 0.95))),
+                             height: max(0.05, min(rect.height, 1 - min(max(0, rect.minY), 0.95))))
+        settings.glassRegion = clamped
+        sessionQueue.async { [weak self] in self?.glass.reset() }
+        DispatchQueue.main.async {
+            self.glassSustained = 0
+            self.glassOccupied = false
+            self.glassVerdict = "Learning the window…"
         }
     }
 
@@ -774,6 +964,11 @@ final class DetectionEngine: NSObject, ObservableObject {
     /// One line describing what this node is seeing right now, shown under its
     /// tile on the controller so you can read the wall without tapping in.
     private func liveStatusLine() -> String {
+        // In glass mode the verdict is the status, so a paired phone watching
+        // this device's feed reads "OCCUPIED" rather than "idle".
+        if settings.glassMode {
+            return String(format: "glass · %@ · act %.2f", glassVerdict, glassActivity)
+        }
         if let t = tracker.active.first(where: { $0.misses == 0 && $0.hits >= settings.confirmHits }) {
             var s = t.label.capitalized
             if let r = t.smoothedRange { s += " " + Units.distance(r) }

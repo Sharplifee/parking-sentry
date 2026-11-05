@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import CoreGraphics
 
 // Free functions rather than nested ones: a nested func inside init() captures
 // self implicitly, which Swift rejects before all stored properties are set.
@@ -62,6 +63,28 @@ final class Settings: ObservableObject {
     /// How many clips to keep before the oldest are deleted.
     @Published var clipRetention: Int { didSet { d.set(clipRetention, forKey: "clipRetention") } }
 
+    // MARK: Through-glass occupancy
+    /// Look inside a heavily tinted vehicle instead of watching the scene.
+    /// Replaces the person/vehicle pipeline while it is on: the camera locks a
+    /// long exposure for the dark side of the glass, and the question becomes
+    /// "is anything moving in there", not "what is that".
+    @Published var glassMode: Bool { didSet { d.set(glassMode, forKey: "glassMode") } }
+    /// Amplification. Higher sees smaller movement and more reflections.
+    @Published var glassGain: Double { didSet { d.set(glassGain, forKey: "glassGain") } }
+    /// The window, normalized, origin bottom-left. Drawn by dragging on screen.
+    @Published var glassRegion: CGRect {
+        didSet {
+            d.set(glassRegion.minX, forKey: "glassRegionX")
+            d.set(glassRegion.minY, forKey: "glassRegionY")
+            d.set(glassRegion.width, forKey: "glassRegionW")
+            d.set(glassRegion.height, forKey: "glassRegionH")
+        }
+    }
+    /// Sustained-activity fraction that counts as occupied.
+    @Published var glassOccupiedThreshold: Double {
+        didSet { d.set(glassOccupiedThreshold, forKey: "glassOccupiedThreshold") }
+    }
+
     /// Grace period after arming so you can walk out of frame.
     @Published var armDelaySeconds: Double { didSet { d.set(armDelaySeconds, forKey: "armDelaySeconds") } }
     /// Feet and miles per hour by default; metric is opt-in.
@@ -98,5 +121,12 @@ final class Settings: ObservableObject {
         clipPreRoll          = dbl("clipPreRoll", 6.0)
         clipPostRoll         = dbl("clipPostRoll", 8.0)
         clipRetention        = int("clipRetention", 200)
+        glassMode            = bool("glassMode", false)
+        glassGain            = dbl("glassGain", 28)
+        glassOccupiedThreshold = dbl("glassOccupiedThreshold", 0.30)
+        glassRegion = CGRect(x: dbl("glassRegionX", 0.22),
+                             y: dbl("glassRegionY", 0.30),
+                             width: dbl("glassRegionW", 0.56),
+                             height: dbl("glassRegionH", 0.40))
     }
 }

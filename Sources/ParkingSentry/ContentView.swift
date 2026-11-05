@@ -16,6 +16,7 @@ struct ContentView: View {
     @ObservedObject private var power = PowerManager.shared
     @State private var priorBrightness: CGFloat = UIScreen.main.brightness
     @State private var pinchStart: CGFloat = 1
+    @State private var drawingGlassRegion = false
 
     var body: some View {
         ZStack {
@@ -58,9 +59,20 @@ struct ContentView: View {
                 }
             }
 
+            if settings.glassMode {
+                GlassRegionOverlay(editing: $drawingGlassRegion)
+                    .environmentObject(engine)
+                    .environmentObject(settings)
+            }
+
             VStack {
                 telemetry
                 Spacer()
+                if settings.glassMode {
+                    GlassPanel(editing: $drawingGlassRegion)
+                        .environmentObject(engine)
+                        .environmentObject(settings)
+                }
                 controls
             }
             .padding()
@@ -195,6 +207,13 @@ struct ContentView: View {
                 }
                 Button { showClips = true } label: {
                     Label("Recordings (\(engine.clipURLs.count))", systemImage: "film")
+                }
+                Button {
+                    engine.setGlassMode(!settings.glassMode)
+                    drawingGlassRegion = false
+                } label: {
+                    Label(settings.glassMode ? "Exit tinted-glass mode" : "Look through tinted glass",
+                          systemImage: settings.glassMode ? "car.fill" : "car")
                 }
                 Button { showMesh = true } label: {
                     Label("Devices", systemImage: "square.grid.2x2")
