@@ -735,6 +735,12 @@ final class DetectionEngine: NSObject, ObservableObject {
         glass.region = settings.glassRegion
         guard let r = glass.analyze(pixelBuffer: pixelBuffer) else { return }
 
+        // The mic is a second, independent answer to the same question: people
+        // inside a closed car talk, shift and shut doors. Kept live here
+        // because the normal pipeline is what usually updates this.
+        let db = audio.currentDB
+        DispatchQueue.main.async { self.soundLevelDB = db }
+
         // The verdict, in the order the failure modes actually occur. A dark
         // readout is not "nobody home" — it is "this measurement is not
         // happening yet", and saying so is the difference between a tool and a
@@ -743,9 +749,9 @@ final class DetectionEngine: NSObject, ObservableObject {
         let occupied = r.sustained >= threshold && r.samples >= 45
         var verdict: String
         if r.exposureLevel < 0.015 {
-            verdict = "Too dark to read — move closer or add light"
+            verdict = "Too dark to read — shade the glass with your body"
         } else if r.contrast < 0.01 {
-            verdict = "No detail through the glass — reframe or change angle"
+            verdict = "No detail — back off a foot and re-aim off-axis"
         } else if r.samples < 45 {
             verdict = "Learning the window…"
         } else if occupied {
@@ -827,6 +833,9 @@ final class DetectionEngine: NSObject, ObservableObject {
             self.glassOccupied = false
             self.glassImage = nil
             self.glassVerdict = on ? "Learning the window…" : "Idle"
+            // Boxes from the normal pipeline would otherwise sit frozen on
+            // screen for as long as this mode is on.
+            if on { self.overlays = [] }
             if !on { self.status = self.isArmed ? "Armed" : (self.isRunning ? "Watching" : "Idle") }
         }
         sessionQueue.async { [weak self] in

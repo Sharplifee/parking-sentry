@@ -51,7 +51,9 @@ struct SettingsView: View {
                            format: { String(format: "%.0f%% of the window", $0 * 100) })
                     Text("For telling whether anyone is inside a car behind 5% limo tint. The camera locks a long exposure and high ISO so it exposes for the dark side of the glass instead of the sunlit body, then amplifies movement inside the box you draw. It does not identify people — through that much tint nothing can — it answers whether something in there is alive and moving, and it only says occupied after the movement has held for several seconds.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Text("There is no infrared option, on this or any iPhone or iPad: Apple fits an IR-cut filter over every camera, and modern ceramic films block 85–98% of near-infrared anyway. Daylight behind the car and glare on the pane are the two things that will beat this — shade the glass with your body or shoot from an angle.")
+                    Text("Hold the device a foot or two off the glass, not against it — closer than the lens can focus reads as no detail. Daylight behind the car and glare on the pane are the two things that beat this: shade the glass with your body and shoot slightly off-axis so the pane is not mirroring the sky back at you.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("There is no infrared option, on this or any iPhone or iPad: Apple fits an IR-cut filter over every camera, and modern ceramic films block 85–98% of near-infrared anyway.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 

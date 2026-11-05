@@ -289,7 +289,7 @@ final class ThroughGlassAnalyzer {
                 let iso = min(format.maxISO, max(format.minISO, format.maxISO * 0.9))
 
                 if device.isExposureModeSupported(.custom) {
-                    device.setExposureModeCustomDuration(duration, iso: iso, completionHandler: nil)
+                    device.setExposureModeCustom(duration: duration, iso: iso, completionHandler: nil)
                 } else if device.isExposureModeSupported(.continuousAutoExposure) {
                     // No custom control (some front cameras): bias exposure as
                     // far toward the shadows as the device allows instead.
