@@ -25,14 +25,16 @@
   <key>ITSAppUsesNonExemptEncryption</key><false/>
   <key>UIStatusBarHidden</key><true/>
   <key>UIViewControllerBasedStatusBarAppearance</key><false/>
-  <key>NSMicrophoneUsageDescription</key><string>MotionSentry measures sound level and uses a sudden noise as a detection trigger. Audio is not recorded.</string>
+  <key>NSMicrophoneUsageDescription</key><string>MotionSentry measures sound level, names the sounds it hears, and can use a sudden noise as a detection trigger.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>MotionSentry can transcribe speech it hears, on this device, when you switch the transcription layer on. It is off by default.</string>
+  <key>NSMotionUsageDescription</key><string>MotionSentry reads the accelerometer and gyroscope to tell when the camera itself is being moved, because scene-motion readings cannot be trusted while it is.</string>
   <key>NSLocalNetworkUsageDescription</key><string>MotionSentry connects your devices so you can watch and control one from another.</string>
   <key>NSBonjourServices</key>
   <array>
     <string>_msentry._tcp</string>
     <string>_msentry._udp</string>
   </array>
-  <key>NSCameraUsageDescription</key><string>Parking Sentry watches the camera for people approaching. Video never leaves this device.</string>
+  <key>NSCameraUsageDescription</key><string>MotionSentry watches the camera for people, vehicles, animals and objects. Everything is analysed on this device. Two optional layers you switch on yourself send a still image to a vision model; nothing else is ever sent off the device.</string>
   <key>UISupportedInterfaceOrientations</key>
   <array>
     <string>UIInterfaceOrientationPortrait</string>
