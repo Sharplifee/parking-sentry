@@ -4,6 +4,8 @@ struct SettingsView: View {
     @EnvironmentObject var settings: Settings
     @EnvironmentObject var engine: DetectionEngine
     @Environment(\.dismiss) private var dismiss
+    /// Loaded from the keychain on appear rather than stored in settings.
+    @State private var modelKey = ""
 
     var body: some View {
         NavigationStack {
@@ -38,6 +40,46 @@ struct SettingsView: View {
                     Stepper("Confirm over \(settings.confirmHits) frames", value: $settings.confirmHits, in: 1...10)
                     Toggle("Only alert when closing in", isOn: $settings.requireApproach)
                     Toggle("Wake on sudden sound", isOn: $settings.soundTrigger)
+                }
+
+                Section("AI layers") {
+                    Picker("Blur", selection: $settings.privacyBlurTarget) {
+                        Text("Faces").tag("faces")
+                        Text("Whole people").tag("people")
+                        Text("Both").tag("both")
+                    }
+                    Toggle("Keep the blur in recordings and the stream", isOn: $settings.blurRecordings)
+                    Text("With this off, the redaction is only on this screen — clips and anything a paired device sees keep the original faces.")
+                        .font(.caption).foregroundStyle(.secondary)
+
+                    TextField("Words to watch for, comma separated", text: $settings.watchKeywords)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    TextField("Find anything: describe it in words", text: $settings.groundingQuery)
+                        .textInputAutocapitalization(.never)
+
+                    SecureField("Anthropic API key (optional)", text: $modelKey)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .onSubmit { KeyStore.set(modelKey, for: "anthropic") }
+                    Button(modelKey.isEmpty ? "Clear key" : "Save key") {
+                        KeyStore.set(modelKey, for: "anthropic")
+                    }
+                    .font(.caption)
+                    slider("Model call every", value: $settings.modelCallInterval,
+                           range: 10...300, step: 10,
+                           format: { String(format: "%.0f s", $0) })
+                    Text("The key is kept in the keychain, not in preferences, and nothing is sent anywhere until you switch on Scene description or Find anything. Those two are the only layers that leave the device; every other layer runs on this phone.")
+                        .font(.caption).foregroundStyle(.secondary)
+
+                    if !settings.redactionRegions.isEmpty {
+                        Button(role: .destructive) {
+                            settings.redactionRegions.removeAll()
+                        } label: {
+                            Text("Clear \(settings.redactionRegions.count) redaction area(s)")
+                        }
+                        .font(.caption)
+                    }
                 }
 
                 Section("Tinted glass") {
@@ -155,6 +197,7 @@ struct SettingsView: View {
                     }
                 }
             }
+            .onAppear { modelKey = KeyStore.get("anthropic") ?? "" }
             .navigationTitle("Settings")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }

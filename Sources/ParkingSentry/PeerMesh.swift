@@ -180,10 +180,17 @@ final class PeerMesh: NSObject, ObservableObject {
     // MARK: Outbound video
 
     nonisolated func offer(frame pixelBuffer: CVPixelBuffer, status: String) {
-        Task { @MainActor in self.sendFrame(pixelBuffer, status: status) }
+        Task { @MainActor in self.sendFrame(CIImage(cvPixelBuffer: pixelBuffer), status: status) }
     }
 
-    private func sendFrame(_ pixelBuffer: CVPixelBuffer, status: String) {
+    /// Used when a privacy layer has composited the frame: what goes to the other
+    /// device must be the redacted image, not the raw camera buffer. Sending the
+    /// original here would blur the local preview and stream the unblurred face.
+    nonisolated func offer(redacted image: CGImage, status: String) {
+        Task { @MainActor in self.sendFrame(CIImage(cgImage: image), status: status) }
+    }
+
+    private func sendFrame(_ ci: CIImage, status: String) {
         guard sharesCamera, !session.connectedPeers.isEmpty else { return }
         let now = Date()
         guard now.timeIntervalSince(lastFrameSent) >= frameInterval else { return }
@@ -194,7 +201,6 @@ final class PeerMesh: NSObject, ObservableObject {
         inFlight = true
 
         let targets = session.connectedPeers
-        let ci = CIImage(cvPixelBuffer: pixelBuffer)
         let ctx = ciContext
 
         encodeQueue.async { [weak self] in

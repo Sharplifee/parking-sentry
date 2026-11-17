@@ -25,6 +25,10 @@ struct ParkingSentryApp: App {
                 .preferredColorScheme(.dark)
                 .onAppear {
                     AlertManager.shared.requestNotificationPermission()
+                    // Registered once at launch: this is what warms every cheap
+                    // model, so flipping a layer on produces output within a
+                    // frame rather than after a model load.
+                    LayerCatalog.buildAndRegister()
                     // Findable and streaming from launch: gating this on "armed"
                     // is why two paired devices saw each other but no picture.
                     PeerMesh.shared.start()

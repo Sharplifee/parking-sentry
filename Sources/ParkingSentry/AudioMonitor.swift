@@ -32,6 +32,8 @@ final class AudioMonitor {
     /// How far above the learned ambient level counts as an event.
     var transientMarginDB: Float = 14
 
+    var isRunning: Bool { running }
+
     func start() throws {
         guard !running else { return }
         // The session is owned centrally; configuring it here used to clobber
@@ -41,8 +43,12 @@ final class AudioMonitor {
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
+        input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, when in
             self?.process(buffer)
+            // The audio layers see the same buffers from the same single tap.
+            // Each layer opening its own tap on the input node is not allowed by
+            // AVAudioEngine anyway, and would fight this one for the session.
+            LayerRegistry.shared.runAudio(buffer: buffer, at: when)
         }
         engine.prepare()
         try engine.start()

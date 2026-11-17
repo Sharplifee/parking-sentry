@@ -50,11 +50,23 @@ final class ClipRecorder {
         guard let pixels = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let t = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
         guard t.isFinite else { return }
+        ingest(image: CIImage(cvPixelBuffer: pixels), at: t)
+    }
+
+    /// Recording a redacted frame. A privacy layer has already composited the
+    /// image, and this is the path that keeps the redaction in the clip rather
+    /// than only on screen — a blur that exists in the preview and not in the
+    /// recording has not protected anybody.
+    func ingest(redacted image: CGImage, at seconds: Double) {
+        guard seconds.isFinite else { return }
+        ingest(image: CIImage(cgImage: image), at: seconds)
+    }
+
+    private func ingest(image ci: CIImage, at t: Double) {
         // Thin to the clip frame rate before doing any work.
         guard t - lastAccepted >= (1.0 / fps) - 0.002 else { return }
         lastAccepted = t
 
-        let ci = CIImage(cvPixelBuffer: pixels)
         let scale = min(1, longEdge / max(ci.extent.width, ci.extent.height))
         let small = ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         guard let cg = ciContext.createCGImage(small, from: small.extent),

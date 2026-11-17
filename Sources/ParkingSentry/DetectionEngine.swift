@@ -83,6 +83,11 @@ final class DetectionEngine: NSObject, ObservableObject {
     /// The window, stretched and with moving cells tinted. The thing to look at.
     @Published var glassImage: UIImage?
 
+    /// Set when a privacy layer is compositing. While this is non-nil the raw
+    /// camera preview is off screen and this is what the operator sees, so there
+    /// is no unredacted layer underneath to show through on a dropped frame.
+    @Published var composedFrame: UIImage?
+
 
     // MARK: Capture
     let session = AVCaptureSession()
@@ -110,6 +115,12 @@ final class DetectionEngine: NSObject, ObservableObject {
     private let audio = AudioMonitor()
     private let clips = ClipRecorder()
     private let tracker = Tracker()
+    private var frameIndex = 0
+    /// This frame's detections, kept so derived layers can read them without the
+    /// detector running a second time.
+    private var lastSubjects: [DetectedSubject] = []
+    private var lastLayerDetect = Date.distantPast
+    private var lastLayerAlert: [String: Date] = [:]
     private let glass = ThroughGlassAnalyzer()
     private var lastGlassRender: Date = .distantPast
     private var lastGlassAlert: Date = .distantPast
@@ -623,18 +634,37 @@ final class DetectionEngine: NSObject, ObservableObject {
         // Rolling pre-roll buffer: fed always while armed so a clip can start
         // seconds BEFORE the trigger. A clip that begins at the detection has
         // already missed the approach, which is the part worth seeing.
-        if isRunning, settings.recordClips { clips.ingest(sampleBuffer) }
+        // Recording happens after the layer pass below when a privacy layer is
+        // compositing, so the clip holds the redacted frame rather than the raw one.
+        let willRedact = settings.blurRecordings && LayerRegistry.shared.producesComposite
+        if isRunning, settings.recordClips, !willRedact { clips.ingest(sampleBuffer) }
 
         ranger.updateIntrinsics(from: sampleBuffer,
                                 bufferWidth: CVPixelBufferGetWidth(pixelBuffer),
                                 bufferHeight: CVPixelBufferGetHeight(pixelBuffer))
+
+        frameIndex += 1
+
+        // The layer system runs on the plain feed, armed or not: a toggled-on
+        // layer that only works while armed would be a surprise, and reading a
+        // scene is a different act from watching it for intruders.
+        let composite = runLayers(pixelBuffer: pixelBuffer, depth: depth,
+                                  sampleBuffer: sampleBuffer)
 
         // Stream to any connected device whether or not detection is armed.
         // Watching a camera and arming it are different things: gating video on
         // "armed" meant two paired devices saw each other and no picture.
         // PeerMesh throttles and downscales internally, so detection still gets
         // the full-resolution buffer.
-        PeerMesh.shared.offer(frame: pixelBuffer, status: liveStatusLine())
+        if let composite, settings.blurRecordings {
+            if isRunning, settings.recordClips {
+                clips.ingest(redacted: composite,
+                             at: CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds)
+            }
+            PeerMesh.shared.offer(redacted: composite, status: liveStatusLine())
+        } else {
+            PeerMesh.shared.offer(frame: pixelBuffer, status: liveStatusLine())
+        }
 
         // Through-glass occupancy replaces the whole detection pipeline rather
         // than running alongside it: Vision has nothing to classify through 5%
@@ -684,6 +714,7 @@ final class DetectionEngine: NSObject, ObservableObject {
         visionTimestamps.removeAll { now.timeIntervalSince($0) > 2 }
         let hz = Double(visionTimestamps.count) / 2.0
 
+        lastSubjects = subjects
         let tracks = tracker.update(with: subjects)
 
         var sourceLabel = "—"
@@ -725,6 +756,118 @@ final class DetectionEngine: NSObject, ObservableObject {
         guard isArmed else { return }
         for t in tracks where t.misses == 0 {
             evaluateAlert(track: t, pixelBuffer: pixelBuffer)
+        }
+    }
+
+    // MARK: AI layers
+
+    /// Runs the active layers for this frame and returns a composited image when a
+    /// privacy layer produced one, so the caller can route it to the preview, the
+    /// recording and the peer stream instead of the raw buffer.
+    @discardableResult
+    private func runLayers(pixelBuffer: CVPixelBuffer,
+                           depth: AVDepthData?,
+                           sampleBuffer: CMSampleBuffer) -> CGImage? {
+        let registry = LayerRegistry.shared
+
+        // An audio layer needs the microphone whether or not detection is armed,
+        // and should release it when the last one is switched off — holding the
+        // mic for nothing costs battery and keeps the recording indicator lit.
+        if registry.needsAudio, !audio.isRunning {
+            do { try audio.start() }
+            catch { EventLog.error(error, name: "layer.audio.start") }
+        } else if !registry.needsAudio, audio.isRunning, !isRunning {
+            audio.stop()
+        }
+
+        guard !registry.activeIDs.isEmpty else {
+            if composedFrame != nil { DispatchQueue.main.async { self.composedFrame = nil } }
+            return nil
+        }
+
+        // Derived layers read the main detector's output. While disarmed the
+        // detector does not run at all, so zones, counts and heatmaps would sit
+        // silently dead on an idle camera — a few passes a second is enough to
+        // keep them honest without turning the idle preview into a full pipeline.
+        if !isRunning, registry.needsTracks,
+           Date().timeIntervalSince(lastLayerDetect) > 0.25 {
+            lastLayerDetect = Date()
+            let subjects = detector.detect(in: pixelBuffer,
+                                           orientation: .up,
+                                           roi: nil,
+                                           minConfidence: Float(settings.personConfidence),
+                                           wantUnknownObjects: false)
+            lastSubjects = subjects
+            _ = tracker.update(with: subjects)
+        }
+
+        let ctx = FrameContext(pixelBuffer: pixelBuffer,
+                               orientation: .up,
+                               handler: VNImageRequestHandler(cvPixelBuffer: pixelBuffer,
+                                                              orientation: .up,
+                                                              options: [:]),
+                               depth: depth,
+                               frameIndex: frameIndex,
+                               timestamp: CMSampleBufferGetPresentationTimeStamp(sampleBuffer),
+                               width: CVPixelBufferGetWidth(pixelBuffer),
+                               height: CVPixelBufferGetHeight(pixelBuffer),
+                               subjects: lastSubjects,
+                               tracks: tracker.active)
+
+        registry.runVideo(ctx)
+        routeLayerAlerts()
+
+        // Privacy layers composite in order, so two of them stack rather than one
+        // overwriting the other's redaction.
+        var composite: CGImage?
+        for layer in registry.all where registry.isActive(layer.id) && layer.group == .privacy {
+            if let image = registry.outputs[layer.id]?.image { composite = image }
+        }
+        let shown = composite
+        DispatchQueue.main.async {
+            self.composedFrame = shown.map { UIImage(cgImage: $0) }
+        }
+        return composite
+    }
+
+    /// Layers raise alerts through the same path as a detection, so a sound event
+    /// or a zone breach buzzes the phone and lands in the event list like anything
+    /// else. Cooldown is per layer, because one noisy layer should not mute the rest.
+    private func routeLayerAlerts() {
+        let registry = LayerRegistry.shared
+        for (id, output) in registry.outputs {
+            guard let message = output.alert, registry.isActive(id) else { continue }
+            let last = lastLayerAlert[id] ?? .distantPast
+            guard Date().timeIntervalSince(last) >= max(10, settings.cooldownSeconds) else { continue }
+            lastLayerAlert[id] = Date()
+
+            let title = registry.layer(id)?.title ?? "Layer"
+            guard isArmed else {
+                // Unarmed, the finding still belongs in the on-screen list; it just
+                // does not buzz anyone or fire a siren.
+                let text = "\(title): \(message)"
+                DispatchQueue.main.async {
+                    self.events.insert(SentryEvent(id: UUID(), date: Date(), text: text,
+                                                   rangeMeters: nil, thumbnail: nil,
+                                                   alerted: false), at: 0)
+                    if self.events.count > 60 { self.events.removeLast() }
+                }
+                EventLog.action("layer.finding", ["layer": id, "detail": message])
+                continue
+            }
+
+            AlertManager.shared.fire(title: title, body: message,
+                                     snapshot: nil, settings: settings)
+            let eventID = UUID()
+            clips.trigger(label: id, tag: eventID)
+            DispatchQueue.main.async {
+                self.events.insert(SentryEvent(id: eventID, date: Date(),
+                                               text: "\(title): \(message)",
+                                               rangeMeters: nil, thumbnail: nil,
+                                               alerted: true), at: 0)
+                if self.events.count > 60 { self.events.removeLast() }
+            }
+            EventLog.action("layer.alert", ["layer": id, "detail": message])
         }
     }
 

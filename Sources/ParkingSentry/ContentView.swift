@@ -17,21 +17,34 @@ struct ContentView: View {
     @State private var priorBrightness: CGFloat = UIScreen.main.brightness
     @State private var pinchStart: CGFloat = 1
     @State private var drawingGlassRegion = false
+    @State private var showLayers = false
+    @ObservedObject private var layers = LayerRegistry.shared
+    @State private var drawMode: DrawMode?
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            CameraPreview(session: engine.session, overlays: engine.overlays)
-                .ignoresSafeArea()
-                .gesture(
-                    MagnificationGesture()
-                        .onChanged { value in
-                            engine.setZoom(pinchStart * value)
-                        }
-                        .onEnded { _ in pinchStart = engine.zoom }
-                )
-                .onTapGesture(count: 2) { engine.flipCamera() }
+            // While a privacy layer is compositing, the raw preview comes off
+            // screen entirely and the redacted frames are shown in its place.
+            // Drawing the blur on top would leave the unredacted feed underneath,
+            // visible on any dropped frame.
+            if engine.composedFrame != nil {
+                RenderedPreview()
+                    .environmentObject(engine)
+                    .onTapGesture(count: 2) { engine.flipCamera() }
+            } else {
+                CameraPreview(session: engine.session, overlays: engine.overlays)
+                    .ignoresSafeArea()
+                    .gesture(
+                        MagnificationGesture()
+                            .onChanged { value in
+                                engine.setZoom(pinchStart * value)
+                            }
+                            .onEnded { _ in pinchStart = engine.zoom }
+                    )
+                    .onTapGesture(count: 2) { engine.flipCamera() }
+            }
 
             if let problem = engine.cameraProblem {
                 VStack(spacing: 14) {
@@ -59,6 +72,20 @@ struct ContentView: View {
                 }
             }
 
+            // Every active layer draws through one renderer, in normalized
+            // bottom-left coordinates, so a new layer lands correctly with no
+            // drawing code of its own.
+            if !layers.activeIDs.isEmpty {
+                LayerOverlayView()
+                    .environmentObject(engine)
+            }
+
+            if drawMode != nil {
+                LayerDrawOverlay(mode: $drawMode)
+                    .environmentObject(engine)
+                    .environmentObject(settings)
+            }
+
             if settings.glassMode {
                 GlassRegionOverlay(editing: $drawingGlassRegion)
                     .environmentObject(engine)
@@ -73,6 +100,7 @@ struct ContentView: View {
                         .environmentObject(engine)
                         .environmentObject(settings)
                 }
+                ActiveLayerStrip()
                 controls
             }
             .padding()
@@ -106,6 +134,9 @@ struct ContentView: View {
         }
         .fullScreenCover(isPresented: $showWall) { VideoWallView() }
         .sheet(isPresented: $showClips) { ClipLibraryView().environmentObject(engine) }
+        .sheet(isPresented: $showLayers) {
+            LayerPanelView().environmentObject(engine)
+        }
         .fullScreenCover(isPresented: $showWelcome) { WelcomeView() }
         .onChange(of: router.openRecordings) { _, open in
             if open { showClips = true; router.openRecordings = false }
@@ -214,6 +245,24 @@ struct ContentView: View {
                 } label: {
                     Label(settings.glassMode ? "Exit tinted-glass mode" : "Look through tinted glass",
                           systemImage: settings.glassMode ? "car.fill" : "car")
+                }
+                Menu {
+                    Button { drawMode = .zone } label: {
+                        Label("Zone to watch", systemImage: "rectangle.dashed")
+                    }
+                    Button { drawMode = .line } label: {
+                        Label("Counting line", systemImage: "line.diagonal")
+                    }
+                    Button { drawMode = .redaction } label: {
+                        Label("Area to never record", systemImage: "eye.slash")
+                    }
+                } label: {
+                    Label("Draw on the feed", systemImage: "pencil.and.outline")
+                }
+                Button { showLayers = true } label: {
+                    Label(layers.activeIDs.isEmpty ? "AI layers"
+                                                   : "AI layers (\(layers.activeIDs.count) on)",
+                          systemImage: "square.stack.3d.up")
                 }
                 Button { showMesh = true } label: {
                     Label("Devices", systemImage: "square.grid.2x2")

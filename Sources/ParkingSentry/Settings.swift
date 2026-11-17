@@ -8,6 +8,7 @@ private let store = UserDefaults.standard
 private func dbl(_ k: String, _ v: Double) -> Double { store.object(forKey: k) == nil ? v : store.double(forKey: k) }
 private func int(_ k: String, _ v: Int) -> Int { store.object(forKey: k) == nil ? v : store.integer(forKey: k) }
 private func bool(_ k: String, _ v: Bool) -> Bool { store.object(forKey: k) == nil ? v : store.bool(forKey: k) }
+private func str(_ k: String, _ v: String) -> String { store.string(forKey: k) ?? v }
 
 /// All tunables live here and persist to UserDefaults.
 /// Defaults are chosen for an outdoor parking lot at dusk-to-dark, camera on a tripod.
@@ -62,6 +63,32 @@ final class Settings: ObservableObject {
     @Published var clipPostRoll: Double { didSet { d.set(clipPostRoll, forKey: "clipPostRoll") } }
     /// How many clips to keep before the oldest are deleted.
     @Published var clipRetention: Int { didSet { d.set(clipRetention, forKey: "clipRetention") } }
+
+    // MARK: Layers
+    /// Comma-separated words the keyword layer watches for.
+    @Published var watchKeywords: String { didSet { d.set(watchKeywords, forKey: "watchKeywords") } }
+    /// What the open-vocabulary layer looks for, in plain words.
+    @Published var groundingQuery: String { didSet { d.set(groundingQuery, forKey: "groundingQuery") } }
+    /// Seconds between model calls for the layers that use one. Each call costs
+    /// money and bandwidth, so this is deliberately slow by default.
+    @Published var modelCallInterval: Double { didSet { d.set(modelCallInterval, forKey: "modelCallInterval") } }
+
+    // MARK: Privacy layers
+    /// "faces", "people" or "both" — what the blur layer covers.
+    @Published var privacyBlurTarget: String {
+        didSet { d.set(privacyBlurTarget, forKey: "privacyBlurTarget") }
+    }
+    /// Carry the redaction into recordings and the peer stream, not just the
+    /// preview, so a blurred face never leaves the device.
+    @Published var blurRecordings: Bool { didSet { d.set(blurRecordings, forKey: "blurRecordings") } }
+    /// Fixed areas blanked out regardless of what is in them.
+    @Published var redactionRegions: [CGRect] {
+        didSet {
+            if let data = try? JSONEncoder().encode(redactionRegions) {
+                d.set(data, forKey: "redactionRegions")
+            }
+        }
+    }
 
     // MARK: Through-glass occupancy
     /// Look inside a heavily tinted vehicle instead of watching the scene.
@@ -121,6 +148,13 @@ final class Settings: ObservableObject {
         clipPreRoll          = dbl("clipPreRoll", 6.0)
         clipPostRoll         = dbl("clipPostRoll", 8.0)
         clipRetention        = int("clipRetention", 200)
+        watchKeywords        = str("watchKeywords", "")
+        groundingQuery       = str("groundingQuery", "")
+        modelCallInterval    = dbl("modelCallInterval", 30)
+        privacyBlurTarget    = str("privacyBlurTarget", "faces")
+        blurRecordings       = bool("blurRecordings", true)
+        redactionRegions     = (d.data(forKey: "redactionRegions")
+            .flatMap { try? JSONDecoder().decode([CGRect].self, from: $0) }) ?? []
         glassMode            = bool("glassMode", false)
         glassGain            = dbl("glassGain", 28)
         glassOccupiedThreshold = dbl("glassOccupiedThreshold", 0.30)
