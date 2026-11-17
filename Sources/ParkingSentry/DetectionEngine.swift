@@ -814,14 +814,15 @@ final class DetectionEngine: NSObject, ObservableObject {
                                subjects: lastSubjects,
                                tracks: tracker.active)
 
-        registry.runVideo(ctx)
-        routeLayerAlerts()
+        let produced = registry.runVideo(ctx)
+        routeLayerAlerts(produced)
 
         // Privacy layers composite in order, so two of them stack rather than one
-        // overwriting the other's redaction.
+        // overwriting the other's redaction. Read from this frame's own results,
+        // not the published dictionary, which belongs to the main thread.
         var composite: CGImage?
-        for layer in registry.all where registry.isActive(layer.id) && layer.group == .privacy {
-            if let image = registry.outputs[layer.id]?.image { composite = image }
+        for layer in registry.all where layer.group == .privacy {
+            if let image = produced[layer.id]?.image { composite = image }
         }
         let shown = composite
         DispatchQueue.main.async {
@@ -833,10 +834,10 @@ final class DetectionEngine: NSObject, ObservableObject {
     /// Layers raise alerts through the same path as a detection, so a sound event
     /// or a zone breach buzzes the phone and lands in the event list like anything
     /// else. Cooldown is per layer, because one noisy layer should not mute the rest.
-    private func routeLayerAlerts() {
+    private func routeLayerAlerts(_ produced: [String: LayerOutput]) {
         let registry = LayerRegistry.shared
-        for (id, output) in registry.outputs {
-            guard let message = output.alert, registry.isActive(id) else { continue }
+        for (id, output) in produced {
+            guard let message = output.alert else { continue }
             let last = lastLayerAlert[id] ?? .distantPast
             guard Date().timeIntervalSince(last) >= max(10, settings.cooldownSeconds) else { continue }
             lastLayerAlert[id] = Date()

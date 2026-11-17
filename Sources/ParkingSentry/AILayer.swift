@@ -343,9 +343,15 @@ final class LayerRegistry: ObservableObject {
 
     /// Runs the active video and derived layers for one frame. Called on the capture
     /// queue; never on main.
-    func runVideo(_ ctx: FrameContext) {
+    ///
+    /// Returns this frame's outputs to the caller directly. The published
+    /// `outputs` dictionary is written on main a moment later for the UI, and
+    /// reading that from the capture thread would be both a frame stale and a
+    /// genuine data race on a Swift dictionary.
+    @discardableResult
+    func runVideo(_ ctx: FrameContext) -> [String: LayerOutput] {
         let active = liveActiveSnapshot
-        guard !active.isEmpty else { return }
+        guard !active.isEmpty else { return [:] }
         var produced: [String: LayerOutput] = [:]
         var newLines: [LayerFeedLine] = []
         var spent = 0.0
@@ -384,11 +390,13 @@ final class LayerRegistry: ObservableObject {
 
         govern(spent: spent, active: active)
 
-        guard !produced.isEmpty || !newLines.isEmpty else { return }
+        guard !produced.isEmpty || !newLines.isEmpty else { return produced }
+        let snapshot = produced
         DispatchQueue.main.async {
-            for (k, v) in produced { self.outputs[k] = v }
+            for (k, v) in snapshot { self.outputs[k] = v }
             if !newLines.isEmpty { self.appendFeed(newLines) }
         }
+        return produced
     }
 
     /// Audio layers are driven from the mic tap, on its own thread.

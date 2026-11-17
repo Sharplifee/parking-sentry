@@ -27,7 +27,7 @@ final class SoundHub: NSObject, SNResultsObserving {
     }
 
     private var analyzer: SNAudioStreamAnalyzer?
-    private var request: SNClassifySoundRequest?
+    private var classifyRequest: SNClassifySoundRequest?
     private var framePosition: AVAudioFramePosition = 0
     private var subscribers = 0
     private let lock = NSLock()
@@ -53,9 +53,9 @@ final class SoundHub: NSObject, SNResultsObserving {
 
     private func teardown() {
         lock.lock()
-        if let request, let analyzer { analyzer.remove(request) }
+        if let classifyRequest, let analyzer { analyzer.remove(classifyRequest) }
         analyzer = nil
-        request = nil
+        classifyRequest = nil
         framePosition = 0
         recent.removeAll()
         lock.unlock()
@@ -78,7 +78,7 @@ final class SoundHub: NSObject, SNResultsObserving {
             // observer is what keeps results flowing.
             try a.add(r, withObserver: self)
             analyzer = a
-            request = r
+            classifyRequest = r
             knownLabels = r.knownClassifications
             startupError = nil
             EventLog.action("sound.classifier.ready", ["labels": r.knownClassifications.count])

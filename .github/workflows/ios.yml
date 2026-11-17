@@ -64,10 +64,24 @@ jobs:
           ls -l ~/Library/MobileDevice/Provisioning\ Profiles/
 
       - name: Generate project and stamp build number
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_APP_ID: ${{ secrets.ASC_APP_ID }}
         run: |
           xcodegen generate
+          pip3 install --quiet --break-system-packages pyjwt 2>/dev/null || pip3 install --quiet pyjwt
           PLIST=Sources/ParkingSentry/Support/Info.plist
-          BUILD=$((GITHUB_RUN_NUMBER + 100))
+          # The run number alone can land on a build number Apple already has,
+          # and Apple DROPS a duplicate silently while altool reports success.
+          # Apple's highest alone is no safer: a build still being ingested is
+          # invisible to the API. The script takes the max of both.
+          BUILD=$(python3 scripts/next_build_number.py)
+          if ! [ "$BUILD" -gt 0 ] 2>/dev/null; then
+            echo "build number script produced '$BUILD'; falling back to run number"
+            BUILD=$((GITHUB_RUN_NUMBER + 100))
+          fi
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" "$PLIST"
           echo "BUILD_NUMBER=$BUILD" >> "$GITHUB_ENV"
           echo "CFBundleVersion = $BUILD"
