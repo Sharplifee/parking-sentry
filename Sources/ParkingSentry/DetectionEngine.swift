@@ -843,7 +843,10 @@ final class DetectionEngine: NSObject, ObservableObject {
                                width: CVPixelBufferGetWidth(pixelBuffer),
                                height: CVPixelBufferGetHeight(pixelBuffer),
                                subjects: lastSubjects,
-                               tracks: tracker.active)
+                               tracks: tracker.active,
+                               // The preview draws the detector's boxes whenever the
+                               // detector is running.
+                               drawsSubjectOverlays: isRunning)
 
         let produced = registry.runVideo(ctx)
         routeLayerAlerts(produced)

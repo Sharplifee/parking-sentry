@@ -25,9 +25,19 @@ final class ObjectLabelLayer: DerivedAILayer {
         guard !ctx.subjects.isEmpty else { return nil }
         var out = LayerOutput()
         out.shapes = ctx.subjects.map { s in
-            .box(s.boundingBox,
-                 label: String(format: "%@ %.0f%%", s.label, s.confidence * 100),
-                 tint: tint(for: s.category))
+            let caption = String(format: "%@ %.0f%%", s.label, s.confidence * 100)
+            // When the preview is already outlining this subject with its range
+            // and speed, a second outline in a different style around the same
+            // person is noise. This then contributes the one thing the preview's
+            // caption does not carry — the classifier's confidence — placed below
+            // the box, clear of it.
+            if ctx.drawsSubjectOverlays {
+                return .label(caption,
+                              at: CGPoint(x: s.boundingBox.midX,
+                                          y: s.boundingBox.minY - 0.012),
+                              tint: tint(for: s.category))
+            }
+            return .box(s.boundingBox, label: caption, tint: tint(for: s.category))
         }
         out.badge = "\(ctx.subjects.count)"
         return out
@@ -58,7 +68,16 @@ final class TrackingLayer: DerivedAILayer {
         guard !live.isEmpty else { return nil }
         var out = LayerOutput()
         for t in live {
-            out.shapes.append(.box(t.box, label: "#\(t.id) \(t.label)", tint: .primary))
+            // The trail is this layer's real contribution and is drawn either
+            // way. The box is only restated when the preview is not already
+            // drawing one around the same track.
+            if ctx.drawsSubjectOverlays {
+                out.shapes.append(.label("#\(t.id)",
+                                         at: CGPoint(x: t.box.maxX, y: t.box.maxY + 0.008),
+                                         tint: .primary))
+            } else {
+                out.shapes.append(.box(t.box, label: "#\(t.id) \(t.label)", tint: .primary))
+            }
             let trail = t.samples.suffix(40).map(\.centre)
             if trail.count > 2 { out.shapes.append(.polyline(Array(trail), tint: .flow)) }
         }

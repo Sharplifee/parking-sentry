@@ -216,6 +216,16 @@ struct FrameContext {
     /// re-run a detector that has already run.
     let subjects: [DetectedSubject]
     let tracks: [Track]
+    /// True when the camera preview is already drawing its own subject boxes.
+    ///
+    /// The app has two renderers: the preview layer draws the detector's boxes
+    /// with range, speed and measured height, and the layer overlay draws
+    /// everything the layers emit. Both describe the same people. With the object
+    /// layer switched on, every subject got two outlines in two styles with two
+    /// captions fighting for the same corner — the single most obvious piece of
+    /// visual clutter in the app. Layers that would restate a subject box check
+    /// this and contribute a label instead.
+    let drawsSubjectOverlays: Bool
 }
 
 extension FrameContext {

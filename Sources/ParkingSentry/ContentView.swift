@@ -145,6 +145,7 @@ struct ContentView: View {
             }
         }
         .onAppear { engine.startPreview() }
+        .onChange(of: remote.stealth) { _, on in applyStealthBrightness(on) }
         .statusBarHidden(remote.stealth)
         .persistentSystemOverlays(remote.stealth ? .hidden : .automatic)
         .sheet(isPresented: $showSettings) {
@@ -173,6 +174,23 @@ struct ContentView: View {
 
     private func exitStealth() {
         withAnimation(.easeInOut(duration: 0.25)) { RemoteControl.shared.stealth = false }
+    }
+
+    /// Stealth has to take the backlight with it.
+    ///
+    /// `priorBrightness` was captured and then never used: the curtain went up
+    /// and the screen stayed at whatever brightness it was. A black screen at
+    /// full brightness is a visibly glowing rectangle in a dark car park, which
+    /// is the one situation this mode exists for. Driven off the state rather
+    /// than the button, because stealth can also be switched on from another
+    /// device over the peer link.
+    private func applyStealthBrightness(_ on: Bool) {
+        if on {
+            priorBrightness = UIScreen.main.brightness
+            UIScreen.main.brightness = 0
+        } else {
+            UIScreen.main.brightness = priorBrightness
+        }
     }
 
     private var controls: some View {
