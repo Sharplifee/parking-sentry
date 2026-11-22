@@ -195,7 +195,15 @@ final class ThroughGlassAnalyzer {
         // Occupancy is a sustained story, not a frame: a person breathing and
         // shifting produces repeated small hits, while a passing shadow is one.
         let hits = history.filter { $0 > 0.15 }.count
-        let sustained = history.isEmpty ? 0 : Double(hits) / Double(history.count)
+        // Divided by a floor of sixty frames, not by however much history exists
+        // yet. With two frames recorded and one of them a hit, dividing by the
+        // actual count gave a sustained figure of 0.5 — over the occupancy
+        // threshold — so the very first flicker after the region was drawn could
+        // read as "someone is in there". Treating the frames not yet gathered as
+        // non-hits means the figure climbs into the threshold over about two
+        // seconds of real evidence instead.
+        let window = Double(max(60, history.count))
+        let sustained = Double(hits) / window
 
         return Reading(activity: activity, glare: glare,
                        exposureLevel: mean / 255, sustained: sustained,

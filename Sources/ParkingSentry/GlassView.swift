@@ -114,7 +114,7 @@ struct GlassPanel: View {
                     .fill(engine.glassOccupied ? Color.red : Color.cyan)
                     .frame(width: 9, height: 9)
                 Text(engine.glassVerdict)
-                    .font(.footnote.weight(.semibold))
+                    .font(Style.headline)
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
                 Spacer(minLength: 4)
@@ -182,18 +182,20 @@ struct GlassPanel: View {
             }
             .tint(.white)
         }
-        .padding(11)
-        .background(.black.opacity(0.62), in: RoundedRectangle(cornerRadius: 12))
+        .padding(Style.inset)
         .foregroundStyle(.white)
+        // The app's one floating surface, rather than this panel's own flat black.
+        // Three different materials for three panels on the same screen was most
+        // of why the camera view looked assembled rather than designed.
+        .sentryGlass(RoundedRectangle(cornerRadius: Style.radiusMedium, style: .continuous))
     }
 
     private func num(_ label: String, _ value: String) -> some View {
         HStack(spacing: 3) {
-            Text(label).foregroundStyle(.white.opacity(0.45))
+            Text(label).foregroundStyle(.white.opacity(Style.dimmer))
             Text(value).foregroundStyle(.white.opacity(0.9))
         }
-        .font(.system(size: 11, weight: .medium, design: .monospaced))
-        .lineLimit(1)
+        .sentryReadout()
         .fixedSize()
     }
 }
