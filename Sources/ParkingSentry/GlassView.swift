@@ -31,7 +31,7 @@ struct GlassRegionOverlay: View {
 
                 if editing {
                     Text("drag across the window")
-                        .font(.caption2.weight(.semibold))
+                        .font(Style.footnote)
                         .padding(.horizontal, 8).padding(.vertical, 4)
                         .background(.black.opacity(0.6), in: Capsule())
                         .foregroundStyle(.white)
@@ -159,7 +159,7 @@ struct GlassPanel: View {
                     editing = true
                 } label: {
                     Label("Draw window", systemImage: "viewfinder.rectangular")
-                        .font(.caption.weight(.semibold))
+                        .font(Style.caption)
                 }
                 .buttonStyle(.bordered)
 
@@ -167,7 +167,7 @@ struct GlassPanel: View {
                     engine.setGlassRegion(settings.glassRegion)
                 } label: {
                     Label("Reset baseline", systemImage: "arrow.clockwise")
-                        .font(.caption.weight(.semibold))
+                        .font(Style.caption)
                 }
                 .buttonStyle(.bordered)
 
@@ -176,7 +176,7 @@ struct GlassPanel: View {
                 Button {
                     engine.setGlassMode(false)
                 } label: {
-                    Text("Exit").font(.caption.weight(.semibold))
+                    Text("Exit").font(Style.caption)
                 }
                 .buttonStyle(.bordered)
             }

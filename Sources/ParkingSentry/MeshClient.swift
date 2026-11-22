@@ -49,9 +49,19 @@ final class MeshClient: ObservableObject {
         UIDevice.current.name
     }
 
+    /// Announces the change, because views display it.
+    ///
+    /// This read and wrote UserDefaults with no `objectWillChange`, so renaming a
+    /// device updated storage and the peer identity but left the name on screen
+    /// as it was until something unrelated redrew the view — it looked as though
+    /// the rename had not taken.
     var deviceName: String {
         get { UserDefaults.standard.string(forKey: "meshDeviceName") ?? MeshClient.defaultName }
-        set { UserDefaults.standard.set(newValue, forKey: "meshDeviceName") }
+        set {
+            guard newValue != deviceName else { return }
+            objectWillChange.send()
+            UserDefaults.standard.set(newValue, forKey: "meshDeviceName")
+        }
     }
 
     // MARK: Requests

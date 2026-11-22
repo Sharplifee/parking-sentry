@@ -68,7 +68,7 @@ struct LayerDrawOverlay: View {
 
                 VStack {
                     Text(mode?.prompt ?? "")
-                        .font(.footnote.weight(.semibold))
+                        .font(Style.caption)
                         .padding(.horizontal, 12).padding(.vertical, 7)
                         .background(.black.opacity(0.7), in: Capsule())
                         .foregroundStyle(.white)

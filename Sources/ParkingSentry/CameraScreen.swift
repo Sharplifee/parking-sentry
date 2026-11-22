@@ -53,8 +53,8 @@ struct StatusBar: View {
                         Image(systemName: "sensor.tag.radiowaves.forward").font(.caption2)
                     }
                     Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(Style.dim))
                 }
             }
             .buttonStyle(.plain)
