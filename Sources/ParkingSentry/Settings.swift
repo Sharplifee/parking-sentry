@@ -73,6 +73,14 @@ final class Settings: ObservableObject {
     /// money and bandwidth, so this is deliberately slow by default.
     @Published var modelCallInterval: Double { didSet { d.set(modelCallInterval, forKey: "modelCallInterval") } }
 
+    // MARK: On-device model layers
+    /// The question the answering layer asks about what the camera has seen.
+    @Published var llmQuestion: String { didSet { d.set(llmQuestion, forKey: "llmQuestion") } }
+    /// Target language code for on-device translation, empty for off.
+    @Published var translationTarget: String {
+        didSet { d.set(translationTarget, forKey: "translationTarget") }
+    }
+
     // MARK: Privacy layers
     /// "faces", "people" or "both" — what the blur layer covers.
     @Published var privacyBlurTarget: String {
@@ -148,6 +156,8 @@ final class Settings: ObservableObject {
         clipPreRoll          = dbl("clipPreRoll", 6.0)
         clipPostRoll         = dbl("clipPostRoll", 8.0)
         clipRetention        = int("clipRetention", 200)
+        llmQuestion          = str("llmQuestion", "")
+        translationTarget    = str("translationTarget", "")
         watchKeywords        = str("watchKeywords", "")
         groundingQuery       = str("groundingQuery", "")
         modelCallInterval    = dbl("modelCallInterval", 30)

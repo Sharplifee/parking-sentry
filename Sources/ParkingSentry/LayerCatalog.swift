@@ -52,7 +52,11 @@ enum LayerCatalog {
             SentimentLayer(),
             EntityLayer(),
             KeywordLayer(),
-            LanguageIDLayer()
+            LanguageIDLayer(),
+            // Apple's own on-device language model and translator — no download.
+            SummarizationLayer(),
+            QuestionAnsweringLayer(),
+            OnDeviceTranslationLayer()
         ]
         layers += LanguageLayerGaps.all()
         layers += AudioLayerGaps.all()

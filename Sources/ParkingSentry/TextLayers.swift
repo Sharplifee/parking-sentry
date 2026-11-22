@@ -248,11 +248,6 @@ enum LanguageLayerGaps {
     static func all() -> [AILayer] {
         [
             UnavailableLayer(
-                id: "text.translate", title: "Translation",
-                detail: "Translating the transcript on-device.",
-                group: .language, modality: .text,
-                availability: .noPublicAPI("Apple's Translation framework only hands out a session through a SwiftUI view modifier before iOS 26, so a background pipeline cannot reach it. iOS 26 added a headless initializer, which throws unless the language pair is already downloaded.")),
-            UnavailableLayer(
                 id: "text.classify", title: "Text classification",
                 detail: "Sorting text into categories you define.",
                 group: .language, modality: .text,

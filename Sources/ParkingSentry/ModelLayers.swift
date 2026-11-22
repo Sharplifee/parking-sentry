@@ -3,6 +3,7 @@ import CoreML
 import Vision
 import CoreVideo
 import CoreGraphics
+import CoreImage
 
 /// Layers backed by downloaded Core ML models rather than by an Apple framework.
 ///

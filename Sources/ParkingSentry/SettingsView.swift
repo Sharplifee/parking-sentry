@@ -52,6 +52,26 @@ struct SettingsView: View {
                     Text("With this off, the redaction is only on this screen — clips and anything a paired device sees keep the original faces.")
                         .font(.caption).foregroundStyle(.secondary)
 
+                    TextField("Ask a question about what the camera sees", text: $settings.llmQuestion)
+                    Picker("Translate into", selection: $settings.translationTarget) {
+                        Text("Off").tag("")
+                        Text("Spanish").tag("es")
+                        Text("French").tag("fr")
+                        Text("German").tag("de")
+                        Text("Portuguese").tag("pt")
+                        Text("Italian").tag("it")
+                        Text("Japanese").tag("ja")
+                        Text("Korean").tag("ko")
+                        Text("Chinese").tag("zh")
+                        Text("Arabic").tag("ar")
+                        Text("Russian").tag("ru")
+                    }
+                    .onChange(of: settings.translationTarget) { _, _ in
+                        TranslationBridge.shared.refreshStatus()
+                    }
+                    Text("Summarization, question answering and translation all run on Apple's own on-device model — no key, no network. They need iOS 26 and an Apple-Intelligence-capable device; the layer panel says so if this one is not. A translation language has to be installed once in iOS Settings › General › Language & Region.")
+                        .font(.caption).foregroundStyle(.secondary)
+
                     TextField("Words to watch for, comma separated", text: $settings.watchKeywords)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()

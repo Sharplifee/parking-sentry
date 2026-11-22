@@ -452,17 +452,7 @@ enum AudioLayerGaps {
                 id: "audio.emotion", title: "Emotion & tone",
                 detail: "Scoring how something was said rather than what was said.",
                 group: .audio, modality: .audio,
-                availability: .noPublicAPI("Nothing in SoundAnalysis or Speech scores vocal affect. Sound events do include shout and scream classes, which is the useful part of this in practice.")),
-            UnavailableLayer(
-                id: "text.summary", title: "Summarization",
-                detail: "Condensing a long transcript.",
-                group: .language, modality: .text,
-                availability: .needsNetwork("NaturalLanguage does not summarize. Needs a model call — add an API key under Multimodal.")),
-            UnavailableLayer(
-                id: "text.qa", title: "Question answering",
-                detail: "Asking questions about the transcript or what has been seen.",
-                group: .language, modality: .text,
-                availability: .needsNetwork("Needs a model call — add an API key under Multimodal."))
+                availability: .noPublicAPI("Nothing in SoundAnalysis or Speech scores vocal affect. Sound events do include shout and scream classes, which is the useful part of this in practice."))
         ]
     }
 }
