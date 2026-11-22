@@ -29,12 +29,27 @@ final class LayerGeometry: ObservableObject {
         var b: CGPoint
     }
 
-    @Published var zones: [Zone] { didSet { save(zones, "layerZones") } }
-    @Published var lines: [CountLine] { didSet { save(lines, "layerLines") } }
+    /// Both halves are kept in step here rather than at the call sites.
+    ///
+    /// The capture queue reads `zonesSnapshot`/`linesSnapshot`, and the only thing
+    /// that refreshed them was the drawing overlay after a new shape. So nothing
+    /// refreshed them at launch: zones and lines restored from storage appeared in
+    /// the UI while the snapshot the analytics layers actually read stayed empty,
+    /// and a zone drawn yesterday counted nothing today until you drew another
+    /// one. Deleting a zone had the mirror-image bug — it vanished from the list
+    /// and went on counting.
+    @Published var zones: [Zone] {
+        didSet { save(zones, "layerZones"); refreshCaches() }
+    }
+    @Published var lines: [CountLine] {
+        didSet { save(lines, "layerLines"); refreshCaches() }
+    }
 
     private init() {
         zones = LayerGeometry.load([Zone].self, "layerZones") ?? []
         lines = LayerGeometry.load([CountLine].self, "layerLines") ?? []
+        // didSet does not fire for assignments in init.
+        refreshCaches()
     }
 
     private func save<T: Encodable>(_ value: T, _ key: String) {

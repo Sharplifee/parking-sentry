@@ -146,6 +146,14 @@ final class ModelStore: ObservableObject {
     }
 
     @Published private(set) var states: [String: State] = [:]
+    /// Lock-protected mirror of `states`.
+    ///
+    /// `states` is `@Published` and every write to it hops to the main thread, but
+    /// `state(_:)` is called from layer `availability` and `warm()`, which run on
+    /// the capture queue. Reading a Swift dictionary while another thread
+    /// reassigns it is not a stale read, and State carries a String in its
+    /// `.failed` case, so there is a refcounted object in there too.
+    private var stateMirror: [String: State] = [:]
     /// Loaded models, kept alive so a toggle does not reload from disk.
     private var loaded: [String: MLModel] = [:]
     private let lock = NSLock()
@@ -153,8 +161,17 @@ final class ModelStore: ObservableObject {
 
     private init() {
         for id in ModelStore.manifest.keys {
-            states[id] = compiledURL(for: id) != nil ? .ready : .absent
+            let state: State = compiledURL(for: id) != nil ? .ready : .absent
+            states[id] = state
+            stateMirror[id] = state
         }
+    }
+
+    /// Single place that moves a state, so the published copy and the mirror can
+    /// never disagree.
+    private func setState(_ id: String, _ state: State) {
+        lock.lock(); stateMirror[id] = state; lock.unlock()
+        DispatchQueue.main.async { self.states[id] = state }
     }
 
     // MARK: Paths
@@ -187,7 +204,10 @@ final class ModelStore: ObservableObject {
         return loaded[id]
     }
 
-    func state(_ id: String) -> State { states[id] ?? .absent }
+    func state(_ id: String) -> State {
+        lock.lock(); defer { lock.unlock() }
+        return stateMirror[id] ?? .absent
+    }
 
     func isReady(_ id: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
@@ -211,14 +231,14 @@ final class ModelStore: ObservableObject {
                 config.computeUnits = .all
                 let model = try MLModel(contentsOf: compiled, configuration: config)
                 self.lock.lock(); self.loaded[id] = model; self.lock.unlock()
-                DispatchQueue.main.async { self.states[id] = .ready }
+                self.setState(id, .ready)
                 EventLog.action("model.loaded", ["model": id])
             } catch {
                 // A compiled model that will not load is usually a half-written
                 // cache from an interrupted compile. Clearing it means the next
                 // request re-downloads rather than failing forever.
                 try? FileManager.default.removeItem(at: compiled)
-                DispatchQueue.main.async { self.states[id] = .absent }
+                self.setState(id, .absent)
                 EventLog.error(error, name: "model.load.failed", ["model": id])
             }
         }
@@ -241,7 +261,7 @@ final class ModelStore: ObservableObject {
             return
         }
 
-        DispatchQueue.main.async { self.states[id] = .downloading(0) }
+        setState(id, .downloading(0))
         let job = EventLog.job("model.fetch")
 
         DispatchQueue.global(qos: .utility).async {
@@ -272,13 +292,13 @@ final class ModelStore: ObservableObject {
 
                     done += data.count
                     let fraction = Double(done) / Double(max(1, remote.totalBytes))
-                    DispatchQueue.main.async { self.states[id] = .downloading(fraction) }
+                    self.setState(id, .downloading(fraction))
                 }
 
                 try? FileManager.default.removeItem(at: package)
                 try FileManager.default.moveItem(at: staging, to: package)
 
-                DispatchQueue.main.async { self.states[id] = .compiling }
+                self.setState(id, .compiling)
                 // The step that normally needs Xcode on a Mac.
                 let compiledTemp = try MLModel.compileModel(at: package)
                 let compiled = self.root.appendingPathComponent("\(id).mlmodelc", isDirectory: true)
@@ -292,13 +312,11 @@ final class ModelStore: ObservableObject {
                 config.computeUnits = .all
                 let model = try MLModel(contentsOf: compiled, configuration: config)
                 self.lock.lock(); self.loaded[id] = model; self.lock.unlock()
-                DispatchQueue.main.async { self.states[id] = .ready }
+                self.setState(id, .ready)
                 job.end(["model": id])
                 EventLog.action("model.ready", ["model": id])
             } catch {
-                DispatchQueue.main.async {
-                    self.states[id] = .failed(error.localizedDescription)
-                }
+                self.setState(id, .failed(error.localizedDescription))
                 job.fail(error)
             }
         }
@@ -306,14 +324,14 @@ final class ModelStore: ObservableObject {
 
     /// Removes a model from disk. The operator may well want 175 MB back.
     func remove(_ id: String) {
-        lock.lock(); loaded[id] = nil; lock.unlock()
+        lock.lock(); loaded[id] = nil; inFlight.remove(id); lock.unlock()
         if let compiled = compiledURL(for: id) {
             try? FileManager.default.removeItem(at: compiled)
         }
         if let package = packageURL(for: id) {
             try? FileManager.default.removeItem(at: package)
         }
-        DispatchQueue.main.async { self.states[id] = .absent }
+        setState(id, .absent)
         EventLog.action("model.removed", ["model": id])
     }
 
