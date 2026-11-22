@@ -72,6 +72,9 @@ enum LayerAvailability: Equatable {
     /// Works, but needs the operator to draw or choose something first. Still
     /// toggleable — the hint goes in the panel instead of blocking the switch.
     case needsSetup(String)
+    /// A model has to be downloaded first. Toggleable: switching the layer on is
+    /// what starts the download, and the panel shows the progress.
+    case needsDownload(String)
     /// Works, but the inference is not on-device.
     case needsNetwork(String)
     /// Apple ships no public API for this and no model is bundled.
@@ -81,7 +84,7 @@ enum LayerAvailability: Equatable {
 
     var isUsable: Bool {
         switch self {
-        case .available, .needsNetwork, .needsSetup: return true
+        case .available, .needsNetwork, .needsSetup, .needsDownload: return true
         default: return false
         }
     }
@@ -91,6 +94,7 @@ enum LayerAvailability: Equatable {
         case .available:                return nil
         case .needsHardware(let s):     return s
         case .needsSetup(let s):        return s
+        case .needsDownload(let s):     return s
         case .needsNetwork(let s):      return s
         case .noPublicAPI(let s):       return s
         case .modelMissing(let s):      return s

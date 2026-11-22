@@ -641,11 +641,6 @@ final class UnavailableLayer: AILayer {
     static func visionGaps() -> [AILayer] {
         [
             UnavailableLayer(
-                id: "depth.mono", title: "Monocular depth",
-                detail: "Per-pixel depth from a single camera with no LiDAR.",
-                group: .vision,
-                availability: .noPublicAPI("Vision has no monocular-depth request and Core ML ships no system model. Needs a bundled depth model (Depth Pro or MiDaS, roughly 60–120 MB).")),
-            UnavailableLayer(
                 id: "faces.identity", title: "Face recognition (identity)",
                 detail: "Matching a face to a named person.",
                 group: .vision,
@@ -655,11 +650,6 @@ final class UnavailableLayer: AILayer {
                 detail: "Age, gender or emotion from a face.",
                 group: .vision,
                 availability: .noPublicAPI("Vision has no face-attribute request of any kind. Needs a bundled classifier, and these models are unreliable enough that acting on their output is a bad idea.")),
-            UnavailableLayer(
-                id: "segmentation.semantic", title: "Semantic segmentation (all classes)",
-                detail: "Pixel class for road, sky, building, vegetation and so on.",
-                group: .vision,
-                availability: .noPublicAPI("Apple's segmentation is class-specific: people, person instances, generic foreground, documents. Arbitrary classes need a bundled DeepLab-style model.")),
             UnavailableLayer(
                 id: "action", title: "Action recognition",
                 detail: "Naming what someone is doing — fighting, falling, loitering.",

@@ -42,6 +42,10 @@ enum MaskGrid {
                 case kCVPixelFormatType_OneComponent8:
                     let p = base.assumingMemoryBound(to: UInt8.self)
                     v = Double(p[sy * bpr + sx]) / 255.0
+                case kCVPixelFormatType_OneComponent16Half:
+                    // The depth model outputs a grayscale float16 image.
+                    let p = base.assumingMemoryBound(to: Float16.self)
+                    v = Double(p[sy * (bpr / 2) + sx])
                 case kCVPixelFormatType_OneComponent32Float:
                     let p = base.assumingMemoryBound(to: Float.self)
                     v = Double(p[sy * (bpr / 4) + sx])

@@ -6,6 +6,7 @@ import SwiftUI
 struct LayerPanelView: View {
     @ObservedObject var registry = LayerRegistry.shared
     @ObservedObject var geometry = LayerGeometry.shared
+    @ObservedObject var store = ModelStore.shared
     @EnvironmentObject var engine: DetectionEngine
     @Environment(\.dismiss) private var dismiss
 
@@ -47,6 +48,18 @@ struct LayerPanelView: View {
                                 if n > 0 { Text("\(n) on").foregroundStyle(.cyan) }
                             }
                         }
+                    }
+                }
+
+                Section("Downloaded models") {
+                    Text("These capabilities have no Apple API, so they run on models downloaded once and compiled on this device. Switching the layer on starts the download; nothing is fetched until you do.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    ForEach(Array(ModelStore.manifest.keys).sorted(), id: \.self) { id in
+                        modelRow(id)
+                    }
+                    if store.diskUsed > 0 {
+                        Text("Using \(ByteCountFormatter.string(fromByteCount: store.diskUsed, countStyle: .file)) on disk")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
 
@@ -103,6 +116,50 @@ struct LayerPanelView: View {
             .navigationTitle("AI layers")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func modelRow(_ id: String) -> some View {
+        let remote = ModelStore.manifest[id]
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(remote?.title ?? id).font(.subheadline)
+                    Text("\((remote?.totalBytes ?? 0) / 1_000_000) MB · \(remote?.license ?? "")")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                Spacer()
+                switch store.state(id) {
+                case .ready:
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                        Button(role: .destructive) { store.remove(id) } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                case .absent:
+                    Button("Download") { store.fetch(id) }
+                        .font(.caption).buttonStyle(.bordered)
+                case .downloading(let f):
+                    Text(String(format: "%.0f%%", f * 100))
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.cyan)
+                case .compiling:
+                    Text("compiling").font(.caption).foregroundStyle(.cyan)
+                case .failed:
+                    Button("Retry") { store.fetch(id) }
+                        .font(.caption).buttonStyle(.bordered).tint(.orange)
+                }
+            }
+            if case .downloading(let f) = store.state(id) {
+                ProgressView(value: f).tint(.cyan)
+            }
+            if case .failed(let why) = store.state(id) {
+                Text(why).font(.caption2).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

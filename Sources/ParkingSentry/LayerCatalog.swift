@@ -32,7 +32,10 @@ enum LayerCatalog {
             OpticalFlowLayer(),
             TrajectoryLayer(),
             ReIdentificationLayer(),
-            SceneAnomalyLayer()
+            SceneAnomalyLayer(),
+            // Downloaded Core ML models rather than Apple framework requests.
+            MonocularDepthLayer(),
+            SemanticSegmentationLayer()
         ]
         layers += UnavailableLayer.visionGaps()
 
@@ -87,6 +90,9 @@ enum LayerCatalog {
         ]
 
         LayerRegistry.shared.register(layers)
+        // Anything downloaded on a previous run is loaded now, so a layer the
+        // operator already paid the download for is warm at launch.
+        for id in ModelStore.manifest.keys { ModelStore.shared.loadIfPresent(id) }
         LayerGeometry.shared.refreshCaches()
         EventLog.action("layers.registered", [
             "total": layers.count,
