@@ -76,7 +76,21 @@ final class AlertManager: NSObject {
         req.setValue("high", forHTTPHeaderField: "Priority")
         req.setValue("rotating_light", forHTTPHeaderField: "Tags")
         req.httpBody = body.data(using: .utf8)
-        URLSession.shared.dataTask(with: req).resume()
+        // Logged, not fired and forgotten. This is the path that tells someone
+        // their camera saw something while they were not holding the phone, and
+        // the previous version discarded the response — so a wrong URL, a dead
+        // ntfy topic or an expired token looked exactly like a working webhook
+        // and the only symptom was alerts that never arrived.
+        URLSession.shared.dataTask(with: req) { _, response, error in
+            if let error {
+                EventLog.error(error, name: "webhook.failed", ["url": u.host ?? "?"])
+                return
+            }
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if !(200...299).contains(code) {
+                EventLog.action("webhook.rejected", ["status": code, "url": u.host ?? "?"])
+            }
+        }.resume()
     }
 
     // MARK: Siren

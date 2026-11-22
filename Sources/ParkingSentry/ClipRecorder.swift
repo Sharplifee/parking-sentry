@@ -25,6 +25,11 @@ final class ClipRecorder {
 
     private var ring: [Frame] = []
     private let queue = DispatchQueue(label: "clip.recorder", qos: .utility)
+    /// The asset writer's own queue. It must not be `queue`: the writer's
+    /// ready-for-data callback is scheduled on whatever queue it is handed, and
+    /// `write()` runs on `queue`, so asking for the callback there and then
+    /// waiting for it on the same serial queue deadlocked on the very first clip.
+    private let writeQueue = DispatchQueue(label: "clip.writer", qos: .utility)
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
     private var recording: [Frame] = []
@@ -100,6 +105,12 @@ final class ClipRecorder {
                 return
             }
             self.currentLabel = label
+            // The tag was accepted and then dropped on the floor. `currentTag` was
+            // declared and never assigned, so `onClipAssigned` never fired and no
+            // event in the list ever got its `clipURL` — every detection showed no
+            // recording even though the file was on disk. The whole
+            // event-to-clip link was dead.
+            self.currentTag = tag
             self.recording = self.ring
             self.ring.removeAll()
             self.recordingUntil = Date().addingTimeInterval(self.postRoll)
@@ -108,8 +119,10 @@ final class ClipRecorder {
 
     private func write() {
         let frames = recording
+        let tag = currentTag
         recording.removeAll()
         recordingUntil = nil
+        currentTag = nil
         guard frames.count > 4, let first = UIImage(data: frames[0].jpeg) else { return }
 
         let stamp = ISO8601DateFormatter().string(from: Date())
@@ -137,14 +150,31 @@ final class ClipRecorder {
         guard writer.startWriting() else { return }
         writer.startSession(atSourceTime: .zero)
 
+        // The event can show "recording…" and link to the file as soon as it
+        // exists, rather than only after the post-roll has elapsed.
+        if let tag {
+            DispatchQueue.main.async { [weak self] in self?.onClipAssigned?(tag, url) }
+        }
+
         let base = frames[0].t
         var index = 0
-        let sem = DispatchSemaphore(value: 0)
-        input.requestMediaDataWhenReady(on: queue) { [weak self] in
-            guard let self else { sem.signal(); return }
+        // No semaphore. Finishing is driven from inside the callback when the
+        // frames run out, which is the pattern this API is built for — the
+        // previous version blocked the calling queue waiting for a callback it
+        // had scheduled onto that same queue, so the first clip hung the clip
+        // queue permanently and every later frame piled up behind it.
+        input.requestMediaDataWhenReady(on: writeQueue) {
             while input.isReadyForMoreMediaData {
                 guard index < frames.count else {
-                    input.markAsFinished(); sem.signal(); return
+                    input.markAsFinished()
+                    writer.finishWriting { [weak self] in
+                        guard writer.status == .completed else {
+                            print("clip write failed: \(writer.error?.localizedDescription ?? "unknown")")
+                            return
+                        }
+                        DispatchQueue.main.async { self?.onClipFinished?(url) }
+                    }
+                    return
                 }
                 let f = frames[index]; index += 1
                 guard let img = UIImage(data: f.jpeg)?.cgImage,
@@ -165,14 +195,6 @@ final class ClipRecorder {
                 adaptor.append(dst, withPresentationTime:
                     CMTime(seconds: max(0, f.t - base), preferredTimescale: 600))
             }
-        }
-        sem.wait()
-        writer.finishWriting { [weak self] in
-            guard writer.status == .completed else {
-                print("clip write failed: \(writer.error?.localizedDescription ?? "unknown")")
-                return
-            }
-            DispatchQueue.main.async { self?.onClipFinished?(url) }
         }
     }
 

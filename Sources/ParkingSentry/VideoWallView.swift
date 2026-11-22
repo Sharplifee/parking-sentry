@@ -27,7 +27,7 @@ struct VideoWallView: View {
             if stealth { stealthCurtain }
         }
         .onAppear { mesh.start(); mesh.setWatching(true) }
-        .onDisappear { mesh.setWatching(false) }
+        .onDisappear { mesh.setWatching(false); restoreBrightnessIfNeeded() }
         .overlay(alignment: .topTrailing) { if !stealth { closeButton } }
         .overlay(alignment: .bottom) { if !stealth { bottomBar } }
         .statusBarHidden(stealth)
@@ -38,9 +38,9 @@ struct VideoWallView: View {
         VStack(spacing: 14) {
             ProgressView().tint(.white)
             Text("Looking for your other devices…")
-                .foregroundStyle(.white.opacity(0.75)).font(.callout)
-            Text("Open MotionSentry on the device doing the watching and tap Arm. Both devices need Wi-Fi on — they'll find each other even without a network.")
-                .font(.caption).foregroundStyle(.white.opacity(0.45))
+                .foregroundStyle(.white.opacity(0.75)).font(Style.body)
+            Text("Open MotionSentry on the device doing the watching and press Start watching. Both devices need Wi-Fi on — they'll find each other even without a network.")
+                .font(Style.footnote).foregroundStyle(.white.opacity(Style.dim))
                 .multilineTextAlignment(.center).padding(.horizontal, 40)
         }
     }
@@ -63,6 +63,7 @@ struct VideoWallView: View {
             tile(p, big: true)
             Button { focused = nil } label: {
                 Label("All cameras", systemImage: "chevron.left")
+                    .font(Style.body)
                     .padding(12).foregroundStyle(.white)
             }
         }
@@ -88,15 +89,18 @@ struct VideoWallView: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(p.displayName).font(.headline)
+                Text(p.displayName).font(Style.headline)
                 if let s = mesh.statusLines[p], !s.isEmpty {
-                    Text(s).font(.caption2).foregroundStyle(.white.opacity(0.85))
+                    Text(s).font(Style.footnote).foregroundStyle(.white.opacity(0.8))
                 }
             }
-            .padding(8).background(.black.opacity(0.45)).foregroundStyle(.white)
+            .padding(.horizontal, 9).padding(.vertical, 7)
+            .foregroundStyle(.white)
+            .sentryGlass(RoundedRectangle(cornerRadius: Style.radiusSmall, style: .continuous))
+            .padding(7)
 
             if mesh.talkingTo == p {
-                Text("● TALKING").font(.caption2.bold())
+                Text("TALKING").font(.system(size: 11, weight: .medium))
                     .padding(.horizontal, 8).padding(.vertical, 4)
                     .background(.red, in: Capsule()).foregroundStyle(.white)
                     .padding(8)
@@ -111,33 +115,34 @@ struct VideoWallView: View {
     }
 
     private func armButton(_ p: MCPeerID) -> some View {
-        // Armed state comes from the peer's own live status line, not from the
-        // remote relay: matching on display name failed whenever the relay was
-        // unreachable or the name had been changed on one side.
-        let status = mesh.statusLines[p] ?? ""
-        let armed = !status.isEmpty && status != "idle"
+        // Reported by the peer itself in its video packet. Inferring it from the
+        // status text read "armed" for any device with something in frame, and for
+        // every device in tinted-glass mode, so the shield offered to disarm
+        // cameras that were only previewing.
+        let armed = mesh.peerArmed[p] ?? false
         return HStack(spacing: 6) {
             Button { mesh.send(command: armed ? "disarm" : "arm", to: p) } label: {
                 Image(systemName: armed ? "shield.slash.fill" : "shield.fill")
-                    .padding(9).background(.ultraThinMaterial, in: Circle())
+                    .padding(9).sentryGlass(Circle(), interactive: true)
             }
             Button { mesh.send(command: "flip", to: p) } label: {
                 Image(systemName: "arrow.triangle.2.circlepath.camera")
-                    .padding(9).background(.ultraThinMaterial, in: Circle())
+                    .padding(9).sentryGlass(Circle(), interactive: true)
             }
             Menu {
                 Button("Blackout that screen") { mesh.send(command: "stealthOn", to: p) }
                 Button("Wake that screen") { mesh.send(command: "stealthOff", to: p) }
             } label: {
                 Image(systemName: "moon.circle")
-                    .padding(9).background(.ultraThinMaterial, in: Circle())
+                    .padding(9).sentryGlass(Circle(), interactive: true)
             }
 
             Image(systemName: mesh.talkingTo == p ? "mic.fill" : "mic")
                 .padding(9)
                 .background(mesh.talkingTo == p ? AnyShapeStyle(Color.red)
-                                                : AnyShapeStyle(.ultraThinMaterial),
+                                                : AnyShapeStyle(Color.clear),
                             in: Circle())
+                .sentryGlass(Circle(), interactive: true)
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { _ in if mesh.talkingTo != p { mesh.beginTalking(to: p) } }
@@ -150,7 +155,7 @@ struct VideoWallView: View {
     private var closeButton: some View {
         Button { dismiss() } label: {
             Image(systemName: "xmark").padding(10)
-                .background(.ultraThinMaterial, in: Circle())
+                .sentryGlass(Circle(), interactive: true)
         }
         .foregroundStyle(.white).padding()
     }
@@ -159,16 +164,16 @@ struct VideoWallView: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Label("Hold the mic button to talk", systemImage: "mic.fill")
-                    .font(.caption).foregroundStyle(.white.opacity(0.6))
+                    .font(Style.caption).foregroundStyle(.white.opacity(0.6))
                 Text("sent \(mesh.framesSent) · received \(mesh.framesReceived)")
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(Style.total)
                     .foregroundStyle(.white.opacity(0.35))
             }
             Spacer()
             Button { enterStealth() } label: {
                 Label("Stealth", systemImage: "moon.fill")
                     .padding(.horizontal, 14).padding(.vertical, 10)
-                    .background(.ultraThinMaterial, in: Capsule())
+                    .sentryGlass(Capsule(), interactive: true)
             }
             .foregroundStyle(.white)
         }
@@ -199,6 +204,12 @@ struct VideoWallView: View {
         priorBrightness = UIScreen.main.brightness
         withAnimation(.easeInOut(duration: 0.45)) { stealth = true }
         UIScreen.main.brightness = 0
+    }
+
+    /// Safety net: leaving this screen while blacked out used to leave the
+    /// display at zero brightness with nothing on screen explaining why.
+    private func restoreBrightnessIfNeeded() {
+        if stealth { UIScreen.main.brightness = priorBrightness }
     }
 
     private func exitStealth() {

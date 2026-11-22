@@ -145,7 +145,12 @@ final class DistanceEstimator {
         guard let dist = d, dist.isFinite, dist > 0.3, dist < 400 else {
             return RangeEstimate(meters: nil, source: .unavailable, truncated: truncated)
         }
-        return RangeEstimate(meters: dist, source: .pinhole, truncated: false)
+        // Carries the real flag, not a hardcoded false. A vehicle is ranged by its
+        // width, which survives being clipped at the top or bottom of the frame —
+        // so this path succeeds while truncated, and reporting false let `size()`
+        // go on to compute a height from a box with no bottom to it. The caller
+        // uses this flag precisely to suppress that.
+        return RangeEstimate(meters: dist, source: .pinhole, truncated: truncated)
     }
 
     /// Turn an apparent box plus a known range into real dimensions.

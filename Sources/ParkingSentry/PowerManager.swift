@@ -80,15 +80,24 @@ final class PowerManager: ObservableObject {
                 budget = .normal
             }
         }
+        let oldCaptureFPS = Self.captureFPSSnapshot
+        let oldVisionInterval = Self.visionIntervalSnapshot
         Self.allowHighResSnapshot = (budget == .full || budget == .normal)
         Self.captureFPSSnapshot = captureFPS
         Self.visionIntervalSnapshot = visionInterval
         Self.peerFPSSnapshot = peerFPS
         Self.clipFPSSnapshot = clipFPS
-        if budget != old {
-            onChange?(budget)
-            Self.onBudgetChange?()
-        }
+
+        // Notified when what the device is actually asked to do changes, not only
+        // when the budget's name does. `captureFPS` varies with `beingWatched`
+        // inside the `.full` budget, so opening a live feed on a charging device
+        // raised the target from 20 to 24 and nothing ever re-applied it to the
+        // camera — the new rate sat in the snapshot until some unrelated thermal
+        // or battery event happened to shift the budget enum.
+        let costChanged = oldCaptureFPS != Self.captureFPSSnapshot
+            || oldVisionInterval != Self.visionIntervalSnapshot
+        if budget != old { onChange?(budget) }
+        if budget != old || costChanged { Self.onBudgetChange?() }
     }
 
     // MARK: What each budget actually costs

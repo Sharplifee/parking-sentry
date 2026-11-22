@@ -688,9 +688,9 @@ final class DetectionEngine: NSObject, ObservableObject {
                 clips.ingest(redacted: composite,
                              at: CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds)
             }
-            PeerMesh.shared.offer(redacted: composite, status: liveStatusLine())
+            PeerMesh.shared.offer(redacted: composite, status: liveStatusLine(), armed: isArmed)
         } else {
-            PeerMesh.shared.offer(frame: pixelBuffer, status: liveStatusLine())
+            PeerMesh.shared.offer(frame: pixelBuffer, status: liveStatusLine(), armed: isArmed)
         }
 
         // Through-glass occupancy replaces the whole detection pipeline rather

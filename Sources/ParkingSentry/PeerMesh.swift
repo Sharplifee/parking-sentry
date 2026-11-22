@@ -25,6 +25,15 @@ final class PeerMesh: NSObject, ObservableObject {
     @Published private(set) var peers: [MCPeerID] = []
     @Published private(set) var frames: [MCPeerID: UIImage] = [:]
     @Published private(set) var statusLines: [MCPeerID: String] = [:]
+    /// Whether each peer's detector is armed, as reported by that peer.
+    ///
+    /// The wall used to infer this from the status text — "not empty and not
+    /// 'idle'" meant armed. But a device that is merely previewing with a person
+    /// in frame sends that person's description as its status, and a device in
+    /// tinted-glass mode sends its verdict whatever its state, so both read as
+    /// armed. The shield button then offered to disarm something that was never
+    /// armed. It is a fact about the sender, so the sender states it.
+    @Published private(set) var peerArmed: [MCPeerID: Bool] = [:]
     @Published private(set) var lastFrameAt: [MCPeerID: Date] = [:]
     @Published private(set) var running = false
     /// Peers seen by the browser, whether or not a session formed. The gap
@@ -164,6 +173,7 @@ final class PeerMesh: NSObject, ObservableObject {
         // Cleared with the frames. Left behind, a stale status line sat under an
         // empty tile claiming the device was still armed.
         statusLines = [:]
+        peerArmed = [:]
         lastFrameAt = [:]
         endTalking()
     }
@@ -183,18 +193,22 @@ final class PeerMesh: NSObject, ObservableObject {
 
     // MARK: Outbound video
 
-    nonisolated func offer(frame pixelBuffer: CVPixelBuffer, status: String) {
-        Task { @MainActor in self.sendFrame(CIImage(cvPixelBuffer: pixelBuffer), status: status) }
+    nonisolated func offer(frame pixelBuffer: CVPixelBuffer, status: String, armed: Bool) {
+        Task { @MainActor in
+            self.sendFrame(CIImage(cvPixelBuffer: pixelBuffer), status: status, armed: armed)
+        }
     }
 
     /// Used when a privacy layer has composited the frame: what goes to the other
     /// device must be the redacted image, not the raw camera buffer. Sending the
     /// original here would blur the local preview and stream the unblurred face.
-    nonisolated func offer(redacted image: CGImage, status: String) {
-        Task { @MainActor in self.sendFrame(CIImage(cgImage: image), status: status) }
+    nonisolated func offer(redacted image: CGImage, status: String, armed: Bool) {
+        Task { @MainActor in
+            self.sendFrame(CIImage(cgImage: image), status: status, armed: armed)
+        }
     }
 
-    private func sendFrame(_ ci: CIImage, status: String) {
+    private func sendFrame(_ ci: CIImage, status: String, armed: Bool) {
         guard sharesCamera, !session.connectedPeers.isEmpty else { return }
         let now = Date()
         guard now.timeIntervalSince(lastFrameSent) >= frameInterval else { return }
@@ -216,6 +230,7 @@ final class PeerMesh: NSObject, ObservableObject {
             if let cg = ctx.createCGImage(small, from: small.extent),
                let jpeg = UIImage(cgImage: cg).jpegData(compressionQuality: 0.35) {
                 var p = Data([Packet.video.rawValue])
+                p.append(armed ? 1 : 0)
                 // Truncated by BYTES, not by characters, and clamped to what the
                 // one-byte length field can hold. `status.prefix(100)` counts
                 // Characters: the status lines carry "·" at two bytes and "—" at
@@ -373,6 +388,8 @@ extension PeerMesh: MCSessionDelegate {
             if state != .connected {
                 self.frames[peerID] = nil
                 self.lastFrameAt[peerID] = nil
+                self.statusLines[peerID] = nil
+                self.peerArmed[peerID] = nil
             }
         }
     }
@@ -384,13 +401,18 @@ extension PeerMesh: MCSessionDelegate {
         let body = Data(data.dropFirst())
         switch kind {
         case .video:
-            guard let len = body.first.map(Int.init), body.count > 1 + len else { return }
-            let status = String(decoding: body[1..<(1 + len)], as: UTF8.self)
-            let jpeg = Data(body[(1 + len)...])
+            // [armed flag][status length][status][jpeg]
+            guard body.count > 2 else { return }
+            let armed = body[0] == 1
+            let len = Int(body[1])
+            guard body.count > 2 + len else { return }
+            let status = String(decoding: body[2..<(2 + len)], as: UTF8.self)
+            let jpeg = Data(body[(2 + len)...])
             guard let img = UIImage(data: jpeg) else { return }
             Task { @MainActor in
                 self.frames[peerID] = img
                 self.statusLines[peerID] = status
+                self.peerArmed[peerID] = armed
                 self.lastFrameAt[peerID] = Date()
                 self.framesReceived += 1
             }
