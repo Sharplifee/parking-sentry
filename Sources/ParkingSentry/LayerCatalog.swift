@@ -36,7 +36,8 @@ enum LayerCatalog {
             // Downloaded Core ML models rather than Apple framework requests.
             MonocularDepthLayer(),
             SemanticSegmentationLayer(),
-            OpenVocabularyLayer()
+            OpenVocabularyLayer(),
+            ActionRecognitionLayer()
         ]
         layers += UnavailableLayer.visionGaps()
 
@@ -45,7 +46,8 @@ enum LayerCatalog {
             VoiceActivityLayer(),
             SoundEventLayer(),
             NoiseProfileLayer(),
-            TranscriptionLayer()
+            TranscriptionLayer(),
+            ProsodyLayer()
         ]
 
         // Language.
@@ -57,7 +59,8 @@ enum LayerCatalog {
             // Apple's own on-device language model and translator — no download.
             SummarizationLayer(),
             QuestionAnsweringLayer(),
-            OnDeviceTranslationLayer()
+            OnDeviceTranslationLayer(),
+            TextClassificationLayer()
         ]
         layers += LanguageLayerGaps.all()
         layers += AudioLayerGaps.all()

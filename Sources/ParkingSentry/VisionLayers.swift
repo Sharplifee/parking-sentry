@@ -649,12 +649,7 @@ final class UnavailableLayer: AILayer {
                 id: "faces.attributes", title: "Face attributes",
                 detail: "Age, gender or emotion from a face.",
                 group: .vision,
-                availability: .noPublicAPI("Vision has no face-attribute request of any kind. Needs a bundled classifier, and these models are unreliable enough that acting on their output is a bad idea.")),
-            UnavailableLayer(
-                id: "action", title: "Action recognition",
-                detail: "Naming what someone is doing — fighting, falling, loitering.",
-                group: .vision,
-                availability: .noPublicAPI("Needs a Create ML action classifier trained on pose sequences. Pose and trajectories are available now and are what such a model would consume; the Behaviour flags layer covers loitering and abandoned objects without one."))
+                availability: .noPublicAPI("Vision has no face-attribute request of any kind. Needs a bundled classifier, and these models are unreliable enough that acting on their output is a bad idea."))
         ]
     }
 }

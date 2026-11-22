@@ -447,12 +447,7 @@ enum AudioLayerGaps {
                 id: "audio.diarization", title: "Speaker identification",
                 detail: "Telling who is speaking, and separating overlapping speakers.",
                 group: .audio, modality: .audio,
-                availability: .noPublicAPI("No public on-device diarization API. SFSpeechRecognizer returns text with no speaker attribution. Needs a bundled embedding model plus clustering.")),
-            UnavailableLayer(
-                id: "audio.emotion", title: "Emotion & tone",
-                detail: "Scoring how something was said rather than what was said.",
-                group: .audio, modality: .audio,
-                availability: .noPublicAPI("Nothing in SoundAnalysis or Speech scores vocal affect. Sound events do include shout and scream classes, which is the useful part of this in practice."))
+                availability: .noPublicAPI("No public on-device diarization API. SFSpeechRecognizer returns text with no speaker attribution. Needs a bundled embedding model plus clustering."))
         ]
     }
 }

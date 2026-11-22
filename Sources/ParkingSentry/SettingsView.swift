@@ -72,6 +72,7 @@ struct SettingsView: View {
                     Text("Summarization, question answering and translation all run on Apple's own on-device model — no key, no network. They need iOS 26 and an Apple-Intelligence-capable device; the layer panel says so if this one is not. A translation language has to be installed once in iOS Settings › General › Language & Region.")
                         .font(.caption).foregroundStyle(.secondary)
 
+                    TextField("Categories to sort text into, comma separated", text: $settings.textCategories)
                     TextField("Words to watch for, comma separated", text: $settings.watchKeywords)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()

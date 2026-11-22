@@ -247,11 +247,6 @@ final class LanguageIDLayer: TextDrivenLayer {
 enum LanguageLayerGaps {
     static func all() -> [AILayer] {
         [
-            UnavailableLayer(
-                id: "text.classify", title: "Text classification",
-                detail: "Sorting text into categories you define.",
-                group: .language, modality: .text,
-                availability: .noPublicAPI("NaturalLanguage classifies only with a Create ML model you train and bundle. Sentiment, entities, language and keyword watching all work now and cover most of what this is used for."))
         ]
     }
 }

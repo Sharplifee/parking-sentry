@@ -76,6 +76,8 @@ final class Settings: ObservableObject {
     // MARK: On-device model layers
     /// The question the answering layer asks about what the camera has seen.
     @Published var llmQuestion: String { didSet { d.set(llmQuestion, forKey: "llmQuestion") } }
+    /// Comma-separated categories for zero-shot text classification.
+    @Published var textCategories: String { didSet { d.set(textCategories, forKey: "textCategories") } }
     /// Phrase used to search back through indexed moments.
     @Published var retrievalQuery: String { didSet { d.set(retrievalQuery, forKey: "retrievalQuery") } }
     /// Target language code for on-device translation, empty for off.
@@ -160,6 +162,7 @@ final class Settings: ObservableObject {
         clipRetention        = int("clipRetention", 200)
         llmQuestion          = str("llmQuestion", "")
         retrievalQuery       = str("retrievalQuery", "")
+        textCategories       = str("textCategories", "")
         translationTarget    = str("translationTarget", "")
         watchKeywords        = str("watchKeywords", "")
         groundingQuery       = str("groundingQuery", "")
