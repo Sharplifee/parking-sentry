@@ -76,6 +76,7 @@ struct SettingsView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                     TextField("Find anything: describe it in words", text: $settings.groundingQuery)
+                    TextField("Search what it saw: describe a moment", text: $settings.retrievalQuery)
                         .textInputAutocapitalization(.never)
 
                     SecureField("Anthropic API key (optional)", text: $modelKey)

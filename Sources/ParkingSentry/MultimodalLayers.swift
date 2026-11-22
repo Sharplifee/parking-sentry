@@ -429,11 +429,6 @@ enum ModelClient {
 enum MultimodalGaps {
     static func all() -> [AILayer] {
         [
-            UnavailableLayer(
-                id: "fusion.retrieval", title: "Cross-modal retrieval",
-                detail: "Searching saved clips by description — \"find the clip with the white van\".",
-                group: .multimodal,
-                availability: .noPublicAPI("Needs an embedding index over every saved clip, built as clips are written. The pieces are here — feature prints and the clip library — but nothing indexes them yet."))
         ]
     }
 }

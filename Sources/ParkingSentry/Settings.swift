@@ -76,6 +76,8 @@ final class Settings: ObservableObject {
     // MARK: On-device model layers
     /// The question the answering layer asks about what the camera has seen.
     @Published var llmQuestion: String { didSet { d.set(llmQuestion, forKey: "llmQuestion") } }
+    /// Phrase used to search back through indexed moments.
+    @Published var retrievalQuery: String { didSet { d.set(retrievalQuery, forKey: "retrievalQuery") } }
     /// Target language code for on-device translation, empty for off.
     @Published var translationTarget: String {
         didSet { d.set(translationTarget, forKey: "translationTarget") }
@@ -157,6 +159,7 @@ final class Settings: ObservableObject {
         clipPostRoll         = dbl("clipPostRoll", 8.0)
         clipRetention        = int("clipRetention", 200)
         llmQuestion          = str("llmQuestion", "")
+        retrievalQuery       = str("retrievalQuery", "")
         translationTarget    = str("translationTarget", "")
         watchKeywords        = str("watchKeywords", "")
         groundingQuery       = str("groundingQuery", "")

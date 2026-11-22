@@ -258,7 +258,7 @@ final class OnDeviceTranslationLayer: VideoAILayer {
     let group = LayerGroup.language
     let modality = LayerModality.text
     var availability: LayerAvailability {
-        if #available(iOS 18.0, *) {
+        if #available(iOS 26.0, *) {
             guard !Settings.shared.translationTarget.isEmpty else {
                 return .needsSetup("Pick a language in Settings")
             }
@@ -275,7 +275,7 @@ final class OnDeviceTranslationLayer: VideoAILayer {
                 return .needsSetup("Checking language availability…")
             }
         }
-        return .noPublicAPI("Needs iOS 18 or later for the Translation framework. This device is on \(OSVersion.current).")
+        return .noPublicAPI("Needs iOS 26 or later: before that, the Translation framework only hands out a session through a SwiftUI view, which a background layer cannot reach. This device is on \(OSVersion.current).")
     }
     let preferredInterval = 30
     let warmAtLaunch = false
@@ -331,6 +331,8 @@ final class TranslationBridge {
 
     func refreshStatus() {
         guard #available(iOS 18.0, *) else { lastStatus = .unsupported; return }
+        // LanguageAvailability is iOS 18, but only iOS 26 can open a headless
+        // session, so anything older is reported as unusable by the layer itself.
         let target = targetLanguage
         guard !target.isEmpty else { lastStatus = .unknown; return }
 
@@ -351,9 +353,9 @@ final class TranslationBridge {
     }
 
     func translate(_ text: String, completion: @escaping (Result<String, Error>) -> Void) {
-        guard #available(iOS 18.0, *) else {
+        guard #available(iOS 26.0, *) else {
             completion(.failure(NSError(domain: "Translation", code: -1, userInfo: [
-                NSLocalizedDescriptionKey: "Needs iOS 18 or later"])))
+                NSLocalizedDescriptionKey: "Needs iOS 26 or later for a headless translation session"])))
             return
         }
         let target = targetLanguage

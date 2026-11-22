@@ -23,6 +23,10 @@ targets:
           - "Support/Info.plist"
       - path: Sources/ParkingSentry/Support/PrivacyInfo.xcprivacy
         buildPhase: resources
+      # Explicit, so the CLIP vocabulary cannot be silently classified as
+      # anything other than a bundled resource.
+      - path: Sources/ParkingSentry/Resources/clip_merges.txt
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.connor.parkingsentry

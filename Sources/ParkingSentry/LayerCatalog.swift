@@ -35,7 +35,8 @@ enum LayerCatalog {
             SceneAnomalyLayer(),
             // Downloaded Core ML models rather than Apple framework requests.
             MonocularDepthLayer(),
-            SemanticSegmentationLayer()
+            SemanticSegmentationLayer(),
+            OpenVocabularyLayer()
         ]
         layers += UnavailableLayer.visionGaps()
 
@@ -67,7 +68,8 @@ enum LayerCatalog {
             AudioVisualFusionLayer(),
             AudioVisualAnomalyLayer(),
             SceneDescriptionLayer(),
-            GroundingLayer()
+            GroundingLayer(),
+            CrossModalRetrievalLayer()
         ]
         layers += MultimodalGaps.all()
 
@@ -93,6 +95,9 @@ enum LayerCatalog {
             RegionRedactionLayer()
         ]
 
+        // The CLIP vocabulary is built from the bundled merge list; doing it here
+        // keeps it off the first frame that needs it.
+        CLIPTokenizer.shared.load()
         LayerRegistry.shared.register(layers)
         // Anything downloaded on a previous run is loaded now, so a layer the
         // operator already paid the download for is warm at launch.
