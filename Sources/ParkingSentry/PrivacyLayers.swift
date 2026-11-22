@@ -30,7 +30,6 @@ final class PrivacyBlurLayer: VideoAILayer {
         Target(rawValue: Settings.shared.privacyBlurTarget) ?? .faces
     }
 
-    private let faceRequest = VNDetectFaceRectanglesRequest()
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
     /// Last known boxes, so a face that Vision drops for one frame does not flash
     /// unblurred. A redaction that flickers is a redaction that failed.
@@ -40,11 +39,11 @@ final class PrivacyBlurLayer: VideoAILayer {
         var regions: [CGRect] = []
 
         if target != .people {
-            let handler = VNImageRequestHandler(cvPixelBuffer: ctx.pixelBuffer,
-                                                orientation: ctx.orientation,
-                                                options: [:])
-            try handler.perform([faceRequest])
-            for obs in faceRequest.results ?? [] {
+            // The frame's shared face detection, not a second handler over the same
+            // pixels — this ran a whole extra image preparation and face pass every
+            // frame, at interval 1, which made the privacy layer roughly twice as
+            // expensive as it needed to be.
+            for obs in try ctx.shared.faceRects() {
                 // Pad generously: a tight face box leaves hairline, ears and jaw
                 // visible, which is plenty to recognise someone by.
                 regions.append(pad(obs.boundingBox, by: 0.35))
@@ -58,7 +57,18 @@ final class PrivacyBlurLayer: VideoAILayer {
 
         let now = Date()
         sticky.removeAll { $0.until < now }
-        for r in regions { sticky.append((r, now.addingTimeInterval(0.5))) }
+        // Refresh an existing patch rather than appending a near-identical one.
+        // Appending every frame put about thirty overlapping rectangles in the list
+        // at 30 fps, and because they were then unioned the blur patch crept outward
+        // for as long as anyone stood still — while the badge counted the list
+        // rather than the faces.
+        for r in regions {
+            if let i = sticky.firstIndex(where: { $0.rect.intersects(r) }) {
+                sticky[i] = (sticky[i].rect.union(r), now.addingTimeInterval(0.5))
+            } else {
+                sticky.append((r, now.addingTimeInterval(0.5)))
+            }
+        }
         let merged = mergeOverlapping(sticky.map(\.rect))
 
         var out = LayerOutput()
@@ -71,47 +81,72 @@ final class PrivacyBlurLayer: VideoAILayer {
         return out
     }
 
+    /// Clipped to the frame rather than clamped per-edge: widening a box near the
+    /// right edge used to keep its origin and extend past 1.0, so the region the
+    /// renderer drew and the region actually pixelated disagreed.
     private func pad(_ r: CGRect, by f: CGFloat) -> CGRect {
         let dx = r.width * f, dy = r.height * f
-        return CGRect(x: max(0, r.minX - dx), y: max(0, r.minY - dy),
-                      width: min(1, r.width + dx * 2),
-                      height: min(1, r.height + dy * 2))
+        return r.insetBy(dx: -dx, dy: -dy)
+            .intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
     }
 
     /// Overlapping blur patches produce visible seams where their edges cross, so
     /// they are merged into single regions first.
+    ///
+    /// Repeated until nothing merges: one pass leaves A∪B overlapping a C that was
+    /// already placed, so two faces close together could still be emitted as
+    /// overlapping patches with the seam this is meant to remove.
     private func mergeOverlapping(_ rects: [CGRect]) -> [CGRect] {
-        var result: [CGRect] = []
-        for r in rects {
-            if let i = result.firstIndex(where: { $0.intersects(r) }) {
-                result[i] = result[i].union(r)
-            } else {
-                result.append(r)
+        var result = rects
+        var merged = true
+        while merged {
+            merged = false
+            var next: [CGRect] = []
+            for r in result {
+                if let i = next.firstIndex(where: { $0.intersects(r) }) {
+                    next[i] = next[i].union(r)
+                    merged = true
+                } else {
+                    next.append(r)
+                }
             }
+            result = next
         }
         return result
     }
 
     /// Pixelate rather than Gaussian-blur: a strong enough mosaic cannot be undone
     /// by sharpening, and a light Gaussian often can.
+    ///
+    /// One filter pass for the whole frame, composited through the regions, rather
+    /// than one pass per region. Pixellate renders over the entire input whatever
+    /// you crop afterwards, so three faces meant three full-resolution filter
+    /// passes every frame at interval 1 — the single most expensive thing the app
+    /// could be asked to do, and it scaled with the number of people in view.
     private func redact(_ buffer: CVPixelBuffer, regions: [CGRect]) -> CGImage? {
         let source = CIImage(cvPixelBuffer: buffer)
         let extent = source.extent
+        guard extent.width > 0, extent.height > 0 else { return nil }
+
+        let pixelRegions = regions.compactMap { r -> CGRect? in
+            let p = CGRect(x: r.minX * extent.width, y: r.minY * extent.height,
+                           width: r.width * extent.width, height: r.height * extent.height)
+            return (p.width > 4 && p.height > 4) ? p : nil
+        }
+        guard !pixelRegions.isEmpty else { return nil }
+
+        // Mosaic cell sized from the smallest region, so the smallest face is still
+        // unrecognisable rather than merely softened.
+        let smallest = pixelRegions.map { min($0.width, $0.height) }.min() ?? 40
+        let mosaic = CIFilter.pixellate()
+        mosaic.inputImage = source.clampedToExtent()
+        mosaic.center = CGPoint(x: extent.midX, y: extent.midY)
+        mosaic.scale = Float(max(8, smallest / 6))
+        guard let blurred = mosaic.outputImage else { return nil }
+
         var composed = source
-
-        for r in regions {
-            let pixel = CGRect(x: r.minX * extent.width,
-                               y: r.minY * extent.height,
-                               width: r.width * extent.width,
-                               height: r.height * extent.height)
-            guard pixel.width > 4, pixel.height > 4 else { continue }
-
-            let mosaic = CIFilter.pixellate()
-            mosaic.inputImage = source.clampedToExtent()
-            mosaic.center = CGPoint(x: pixel.midX, y: pixel.midY)
-            mosaic.scale = Float(max(8, min(pixel.width, pixel.height) / 6))
-            guard let blurred = mosaic.outputImage?.cropped(to: pixel) else { continue }
-            composed = blurred.composited(over: composed)
+        for p in pixelRegions {
+            composed = blurred.cropped(to: p).composited(over: composed)
         }
         return ciContext.createCGImage(composed, from: extent)
     }

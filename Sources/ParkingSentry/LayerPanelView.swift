@@ -334,9 +334,18 @@ private struct LayerRow: View {
                         .foregroundStyle(usable ? .primary : .secondary)
                     if let badge = output?.badge, on {
                         Text(badge)
-                            .font(.caption2.weight(.semibold).monospaced())
+                            .font(Style.readout)
                             .padding(.horizontal, 6).padding(.vertical, 2)
                             .background(.tint.opacity(0.18), in: Capsule())
+                            .lineLimit(1)
+                    }
+                    // Session figures sit outside the pill and in the secondary
+                    // colour, so there is never a question about which number
+                    // describes the scene and which describes the session.
+                    if let total = output?.total, on {
+                        Text(total)
+                            .font(Style.total)
+                            .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
                     if let slower = registry.throttled[layer.id], on {

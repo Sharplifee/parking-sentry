@@ -801,11 +801,13 @@ final class DetectionEngine: NSObject, ObservableObject {
             _ = tracker.update(with: subjects)
         }
 
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer,
+                                            orientation: .up,
+                                            options: [:])
         let ctx = FrameContext(pixelBuffer: pixelBuffer,
                                orientation: .up,
-                               handler: VNImageRequestHandler(cvPixelBuffer: pixelBuffer,
-                                                              orientation: .up,
-                                                              options: [:]),
+                               handler: handler,
+                               shared: SharedFrameVision(handler: handler),
                                depth: depth,
                                frameIndex: frameIndex,
                                timestamp: CMSampleBufferGetPresentationTimeStamp(sampleBuffer),

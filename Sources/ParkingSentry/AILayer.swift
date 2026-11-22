@@ -120,13 +120,23 @@ struct LayerOutput {
     var image: CGImage?
     /// Lines for the side panel: transcript, OCR, entities, labels.
     var lines: [String] = []
-    /// One compact value shown on the layer's own toggle row.
+    /// What this layer is seeing *right now*. Must describe the current frame and
+    /// nothing else.
+    ///
+    /// This distinction is load-bearing. Several layers used to put a running
+    /// total here — faces ever enrolled, plates ever read, cells ever walked on —
+    /// and a number like that sitting next to a live camera reads as "there are
+    /// 37 people out there" when there is one. Cumulative figures go in `total`
+    /// and the panel renders them differently and labels them.
     var badge: String?
+    /// A cumulative or session figure, rendered muted and explicitly as a total.
+    var total: String?
     /// Set when this output should raise an alert through the normal path.
     var alert: String?
 
     var isEmpty: Bool {
-        shapes.isEmpty && image == nil && lines.isEmpty && badge == nil && alert == nil
+        shapes.isEmpty && image == nil && lines.isEmpty
+            && badge == nil && total == nil && alert == nil
     }
 }
 
@@ -145,6 +155,48 @@ enum LayerShape {
 
 // MARK: - Input
 
+/// Vision work that more than one layer wants, done once per frame.
+///
+/// Five layers detect faces: the face box layer, landmarks, attributes, identity,
+/// age/gender and the privacy blur. Each used to own a request and perform it
+/// separately, so switching on the face group ran face detection five times over
+/// the same pixels — the single largest avoidable energy cost in the whole system.
+/// They now ask here and the first one through pays.
+///
+/// Landmarks are a superset: `VNDetectFaceLandmarksRequest` returns observations
+/// that also carry the bounding box. So a landmark request satisfies a later
+/// rectangle request, but not the reverse, and the cache upgrades in that one
+/// direction only.
+final class SharedFrameVision {
+    private let handler: VNImageRequestHandler
+    private var rects: [VNFaceObservation]?
+    private var landmarks: [VNFaceObservation]?
+
+    init(handler: VNImageRequestHandler) { self.handler = handler }
+
+    /// Face bounding boxes. Cheap request unless landmarks have already run.
+    func faceRects() throws -> [VNFaceObservation] {
+        if let landmarks { return landmarks }
+        if let rects { return rects }
+        let request = VNDetectFaceRectanglesRequest()
+        try handler.perform([request])
+        let found = request.results ?? []
+        rects = found
+        return found
+    }
+
+    /// Faces with landmarks. Supersedes any rectangle result already cached.
+    func faceLandmarks() throws -> [VNFaceObservation] {
+        if let landmarks { return landmarks }
+        let request = VNDetectFaceLandmarksRequest()
+        try handler.perform([request])
+        let found = request.results ?? []
+        landmarks = found
+        rects = found
+        return found
+    }
+}
+
 struct FrameContext {
     let pixelBuffer: CVPixelBuffer
     let orientation: CGImagePropertyOrientation
@@ -153,6 +205,8 @@ struct FrameContext {
     /// twelve handlers over the same buffer — and the instance-mask API needs the
     /// very handler its request was performed on in order to upscale a mask.
     let handler: VNImageRequestHandler
+    /// Per-frame cache of the detections more than one layer wants.
+    let shared: SharedFrameVision
     let depth: AVDepthData?
     let frameIndex: Int
     let timestamp: CMTime
@@ -162,6 +216,56 @@ struct FrameContext {
     /// re-run a detector that has already run.
     let subjects: [DetectedSubject]
     let tracks: [Track]
+}
+
+extension FrameContext {
+    /// Width over height of the frame as the viewer sees it, after orientation.
+    var displayAspect: Double {
+        let swapped: Bool
+        switch orientation {
+        case .left, .right, .leftMirrored, .rightMirrored: swapped = true
+        default: swapped = false
+        }
+        let w = Double(swapped ? height : width)
+        let h = Double(swapped ? width : height)
+        guard w > 0, h > 0 else { return 1 }
+        return w / h
+    }
+
+    /// A level line through the centre of the frame at `angle` radians, given as
+    /// normalized endpoints clipped to the frame edges.
+    ///
+    /// Two things make the naive version wrong. Normalized space is square and the
+    /// frame is not, so a slope used directly draws the wrong angle — it has to be
+    /// multiplied by the aspect ratio. And `tan` runs to infinity near the vertical,
+    /// so a phone turned on its side produced endpoints in the millions; clipping to
+    /// the frame rather than extrapolating from a fixed half-span keeps the line on
+    /// screen at every angle.
+    func levelLine(angle: Double) -> [CGPoint] {
+        let slope = tan(angle) * displayAspect
+        // Near-vertical: draw it vertically rather than letting tan explode.
+        guard abs(slope) < 1e4 else {
+            return [CGPoint(x: 0.5, y: 0), CGPoint(x: 0.5, y: 1)]
+        }
+        func y(at x: Double) -> Double { 0.5 + slope * (x - 0.5) }
+        func x(at y: Double) -> Double { 0.5 + (y - 0.5) / slope }
+
+        var hits: [CGPoint] = []
+        for edgeX in [0.0, 1.0] {
+            let yy = y(at: edgeX)
+            if yy >= 0, yy <= 1 { hits.append(CGPoint(x: edgeX, y: yy)) }
+        }
+        if abs(slope) > 1e-9 {
+            for edgeY in [0.0, 1.0] {
+                let xx = x(at: edgeY)
+                if xx > 0, xx < 1 { hits.append(CGPoint(x: xx, y: edgeY)) }
+            }
+        }
+        guard hits.count >= 2 else {
+            return [CGPoint(x: 0, y: 0.5), CGPoint(x: 1, y: 0.5)]
+        }
+        return [hits[0], hits[1]]
+    }
 }
 
 // MARK: - Layer protocols
@@ -263,9 +367,25 @@ final class LayerRegistry: ObservableObject {
         liveActive = saved
     }
 
+    /// Draw order, by layer id. Fixed at registration.
+    ///
+    /// The overlay used to iterate the outputs dictionary directly, and Swift
+    /// dictionary order is not stable between iterations — so with several layers
+    /// on, boxes and labels swapped z-order frame to frame and the overlay
+    /// shimmered. Order is now a property of the layer, not of hash seeding.
+    private(set) var drawOrder: [String: Int] = [:]
+
     /// Called once at startup with every layer the app knows about.
     func register(_ layers: [AILayer]) {
         all = layers
+        // Fills first, then outlines, then anything with text, so a label is never
+        // painted under a heatmap cell drawn by a layer that happens to sort later.
+        let ranked = layers.sorted { a, b in
+            let ra = LayerRegistry.paintRank(a), rb = LayerRegistry.paintRank(b)
+            return ra == rb ? a.id < b.id : ra < rb
+        }
+        drawOrder = Dictionary(uniqueKeysWithValues:
+            ranked.enumerated().map { ($0.element.id, $0.offset) })
         // Drop remembered ids for layers that cannot run on this device, so a
         // toggle saved on a LiDAR phone does not look stuck on a phone without one.
         let kept = activeIDs.filter { id in
@@ -278,6 +398,17 @@ final class LayerRegistry: ObservableObject {
         }
         for layer in all where kept.contains(layer.id) {
             layer.warm()
+        }
+    }
+
+    /// Lower paints first. Whole-frame washes go underneath everything; the layers
+    /// whose whole point is a readable label go on top.
+    private static func paintRank(_ layer: AILayer) -> Int {
+        switch layer.group {
+        case .privacy:   return 0   // redactions are the base image
+        case .sensors:   return 1   // depth and flow washes cover the frame
+        case .analytics: return 2   // zones and lines, under the subjects inside them
+        default:         return 3   // boxes and labels on top, where they are legible
         }
     }
 
@@ -338,10 +469,17 @@ final class LayerRegistry: ObservableObject {
 
     /// True when this layer should run on this frame, honouring its own preferred
     /// interval and anything the governor has added on top.
+    ///
+    /// The absent case returns true rather than subtracting from a sentinel. The
+    /// previous version used `Int.min` as "never run", and `frame - Int.min`
+    /// overflows a signed Int, which in Swift traps rather than wrapping — so the
+    /// app terminated the first time any strided layer was asked whether it was
+    /// due, which is every layer with an interval above 1.
     private func due(_ layer: AILayer, frame: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
         let interval = max(layer.preferredInterval, intervalOverride[layer.id] ?? 1)
         guard interval > 1 else { return true }
-        let last = lastRun[layer.id] ?? Int.min
+        guard let last = lastRun[layer.id] else { return true }
         return frame - last >= interval
     }
 
@@ -358,6 +496,16 @@ final class LayerRegistry: ObservableObject {
         guard !active.isEmpty else { return [:] }
         var produced: [String: LayerOutput] = [:]
         var newLines: [LayerFeedLine] = []
+        /// Layers that ran this frame and found nothing. Their previous output has
+        /// to be cleared, not left standing.
+        ///
+        /// This was the single worst bug in the system. Every layer returns nil when
+        /// its detector comes up empty, and the published dictionary was only ever
+        /// written to, never cleared — so the last frame that *did* find three
+        /// people kept three boxes and the badge "3" on screen indefinitely after
+        /// they left. Every layer inherited it, which is why the symptom showed up
+        /// everywhere at once.
+        var cleared: [String] = []
         var spent = 0.0
 
         for layer in all where active.contains(layer.id) {
@@ -381,23 +529,27 @@ final class LayerRegistry: ObservableObject {
             }
             let ms = (CACurrentMediaTime() - started) * 1000
             spent += ms
-            lastRun[layer.id] = ctx.frameIndex
+            lock.lock(); lastRun[layer.id] = ctx.frameIndex; lock.unlock()
             recordCost(layer.id, ms)
 
-            if let out {
+            if let out, !out.isEmpty {
                 produced[layer.id] = out
                 for line in out.lines {
                     newLines.append(LayerFeedLine(layer: layer.id, text: line, date: Date()))
                 }
+            } else {
+                cleared.append(layer.id)
             }
         }
 
         govern(spent: spent, active: active)
 
-        guard !produced.isEmpty || !newLines.isEmpty else { return produced }
+        guard !produced.isEmpty || !newLines.isEmpty || !cleared.isEmpty else { return produced }
         let snapshot = produced
+        let gone = cleared
         DispatchQueue.main.async {
             for (k, v) in snapshot { self.outputs[k] = v }
+            for k in gone where self.outputs[k] != nil { self.outputs[k] = nil }
             if !newLines.isEmpty { self.appendFeed(newLines) }
         }
         return produced
@@ -433,13 +585,19 @@ final class LayerRegistry: ObservableObject {
         if feed.count > 120 { feed.removeLast(feed.count - 120) }
     }
 
+    /// Called from the capture queue *and* from the microphone tap's own thread.
+    /// Two threads mutating one Swift dictionary is not a stale read, it is memory
+    /// corruption — the storage reallocates underneath the other writer — so the
+    /// sample buffers are under the lock rather than merely the mirror.
     private func recordCost(_ id: String, _ ms: Double) {
+        lock.lock()
         var s = costSamples[id] ?? []
         s.append(ms)
         if s.count > 30 { s.removeFirst() }
         costSamples[id] = s
         let mean = s.reduce(0, +) / Double(s.count)
-        lock.lock(); costMirror[id] = mean; lock.unlock()
+        costMirror[id] = mean
+        lock.unlock()
         DispatchQueue.main.async {
             self.cost[id] = mean
             self.recomputeTotalCost()
@@ -455,12 +613,14 @@ final class LayerRegistry: ObservableObject {
         let budget = (1000.0 / Double(fps)) * 0.55
 
         if spent <= budget {
-            guard !intervalOverride.isEmpty else { return }
+            lock.lock()
+            guard !intervalOverride.isEmpty else { lock.unlock(); return }
             // Relax gradually; snapping straight back re-triggers the overrun.
             for (k, v) in intervalOverride {
                 if v <= 2 { intervalOverride[k] = nil } else { intervalOverride[k] = v - 1 }
             }
             let snapshot = intervalOverride
+            lock.unlock()
             DispatchQueue.main.async {
                 self.throttled = snapshot
                 self.governorNote = snapshot.isEmpty ? nil : self.noteFor(snapshot)
@@ -471,18 +631,20 @@ final class LayerRegistry: ObservableObject {
 
         // Stretch the single worst offender per overrun rather than everything at
         // once, so one expensive layer does not drag the cheap ones down with it.
+        lock.lock()
         let ranked = active
             .compactMap { id -> (String, Double)? in
-                lock.lock(); let c = costMirror[id] ?? 0; lock.unlock()
+                let c = costMirror[id] ?? 0
                 guard c > 1 else { return nil }
                 return (id, c)
             }
             .sorted { $0.1 > $1.1 }
 
-        guard let worst = ranked.first else { return }
+        guard let worst = ranked.first else { lock.unlock(); return }
         let next = min(30, max(2, (intervalOverride[worst.0] ?? 1) + 1))
         intervalOverride[worst.0] = next
         let snapshot = intervalOverride
+        lock.unlock()
         DispatchQueue.main.async {
             self.throttled = snapshot
             self.governorNote = self.noteFor(snapshot)

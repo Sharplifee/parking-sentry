@@ -39,9 +39,9 @@ enum LayerCatalog {
             OpenVocabularyLayer(),
             ActionRecognitionLayer(),
             FaceIdentityLayer(),
-            FaceAttributesLayer()
+            FaceAttributesLayer(),
+            AgeGenderLayer()
         ]
-        layers += UnavailableLayer.visionGaps()
 
         // Audio and speech.
         layers += [

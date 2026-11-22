@@ -40,7 +40,7 @@ struct StatusBar: View {
                                            value: engine.isArmed))
 
                     Text(headline)
-                        .font(.subheadline.weight(.semibold))
+                        .font(Style.headline)
                         .lineLimit(1)
 
                     Spacer(minLength: 4)
@@ -106,8 +106,8 @@ struct StatusBar: View {
 
     private func readout(_ label: String, _ value: String) -> some View {
         HStack(spacing: 4) {
-            Text(label).foregroundStyle(.white.opacity(0.45))
-            Text(value).foregroundStyle(.white.opacity(0.92))
+            Text(label).foregroundStyle(.white.opacity(Style.dimmer))
+            Text(value).foregroundStyle(.white.opacity(0.9))
         }
         .sentryReadout()
     }
@@ -130,18 +130,21 @@ struct LayerDock: View {
         VStack(alignment: .leading, spacing: 8) {
             if !active.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 7) {
+                    SentryGlassGroup(spacing: 7) {
+                        HStack(spacing: 7) {
                         ForEach(active, id: \.id) { layer in
                             SentryChip(
                                 title: layer.title,
                                 value: registry.outputs[layer.id]?.badge,
+                                total: registry.outputs[layer.id]?.total,
                                 icon: "xmark",
                                 tone: .active) {
                                     registry.setActive(layer.id, false)
                                 }
                         }
+                        }
+                        .padding(.horizontal, 2)
                     }
-                    .padding(.horizontal, 2)
                 }
                 .frame(height: 34)
             }
@@ -149,6 +152,7 @@ struct LayerDock: View {
             // Group shortcuts: a direct route into the part of the panel someone
             // actually wants, with the count of what is on in each.
             ScrollView(.horizontal, showsIndicators: false) {
+                SentryGlassGroup(spacing: 7) {
                 HStack(spacing: 7) {
                     SentryChip(title: active.isEmpty ? "Choose layers" : "All layers",
                                value: active.isEmpty ? nil : "\(active.count)",
@@ -167,6 +171,7 @@ struct LayerDock: View {
                     }
                 }
                 .padding(.horizontal, 2)
+                }
             }
             .frame(height: 34)
         }
@@ -189,6 +194,7 @@ struct ToolRail: View {
     let onWall: () -> Void
 
     var body: some View {
+        SentryGlassGroup(spacing: 8) {
         VStack(spacing: 8) {
             SentryToolButton(icon: engine.usingFrontCamera
                              ? "arrow.triangle.2.circlepath.camera.fill"
@@ -225,6 +231,7 @@ struct ToolRail: View {
 
             SentryToolButton(icon: "moon.fill", label: "Stealth", action: onStealth)
         }
+        }
     }
 }
 
@@ -240,9 +247,11 @@ struct ArmButton: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: engine.isRunning ? "stop.fill" : "shield.lefthalf.filled")
-                    .font(.headline)
+                    .font(.system(size: 16, weight: .medium))
+                // The one place in the app that carries weight, because it is the
+                // one control the whole screen exists for.
                 Text(engine.isRunning ? "Stop" : "Start watching")
-                    .font(.headline)
+                    .font(.system(size: 16, weight: .semibold))
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity)

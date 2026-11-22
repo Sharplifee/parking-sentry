@@ -109,6 +109,18 @@ final class ModelStore: ObservableObject {
                 model: 48_315, weights: 19_296_256,
                 license: "SFace, OpenCV Zoo"),
 
+            "faces.age": mine(
+                "faces.age", "Age bracket",
+                pkg: "AgeBracket.mlpackage",
+                model: 113_010, weights: 11_971_200,
+                license: "Levi & Hassner, ONNX Model Zoo, Apache-2.0"),
+
+            "faces.gender": mine(
+                "faces.gender", "Gender estimate",
+                pkg: "GenderClass.mlpackage",
+                model: 113_007, weights: 11_958_912,
+                license: "Levi & Hassner, ONNX Model Zoo, Apache-2.0"),
+
             "audio.diarization": mine(
                 "audio.diarization", "Speaker voice prints",
                 pkg: "SpeakerEmbedding.mlpackage",

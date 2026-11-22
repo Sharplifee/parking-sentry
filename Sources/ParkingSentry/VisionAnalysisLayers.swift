@@ -17,8 +17,17 @@ import Foundation
 /// garbage overlay that looks like a bug in the model.
 enum MaskGrid {
 
+    /// Reduces a mask to a grid by *averaging* each cell, not by sampling a pixel
+    /// from it.
+    ///
+    /// The previous version read one pixel per cell. Over a 1920-wide mask on a
+    /// 48-wide grid that is one pixel in every twelve hundred, which made every
+    /// coverage figure these layers report a coin flip and let a person standing
+    /// side-on disappear from the segmentation overlay entirely between frames. A
+    /// bounded number of taps per cell costs a few hundred microseconds and makes
+    /// the percentages mean what they say.
     static func sample(_ buffer: CVPixelBuffer, cols: Int, rows: Int,
-                       magnitude: Bool = false) -> [Double]? {
+                       magnitude: Bool = false, normalize: Bool = true) -> [Double]? {
         CVPixelBufferLockBaseAddress(buffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
         guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
@@ -32,46 +41,73 @@ enum MaskGrid {
         var out = [Double](repeating: 0, count: cols * rows)
         var peak = 0.0
 
+        /// At most this many taps along each axis of a cell. Four by four is enough
+        /// to stop a thin subject vanishing and is independent of mask resolution.
+        let taps = 4
+
+        func value(_ sx: Int, _ sy: Int) -> Double? {
+            switch format {
+            case kCVPixelFormatType_OneComponent8:
+                let p = base.assumingMemoryBound(to: UInt8.self)
+                return Double(p[sy * bpr + sx]) / 255.0
+            case kCVPixelFormatType_OneComponent16Half:
+                // The depth model outputs a grayscale float16 image.
+                let p = base.assumingMemoryBound(to: Float16.self)
+                return Double(p[sy * (bpr / 2) + sx])
+            case kCVPixelFormatType_OneComponent32Float:
+                let p = base.assumingMemoryBound(to: Float.self)
+                return Double(p[sy * (bpr / 4) + sx])
+            case kCVPixelFormatType_TwoComponent32Float:
+                let p = base.assumingMemoryBound(to: Float.self)
+                let i = sy * (bpr / 4) + sx * 2
+                let dx = Double(p[i]), dy = Double(p[i + 1])
+                return magnitude ? (dx * dx + dy * dy).squareRoot() : dx
+            case kCVPixelFormatType_TwoComponent16Half:
+                // 16-bit half floats need no manual decode on Apple silicon:
+                // Float16 is a real type here.
+                let p = base.assumingMemoryBound(to: Float16.self)
+                let i = sy * (bpr / 2) + sx * 2
+                let dx = Double(p[i]), dy = Double(p[i + 1])
+                return magnitude ? (dx * dx + dy * dy).squareRoot() : dx
+            default:
+                return nil
+            }
+        }
+
+        // Probe the format once rather than per pixel.
+        guard value(0, 0) != nil else { return nil }
+
         for gy in 0..<rows {
             // Grid is bottom-left origin; every Vision buffer is top-left.
-            let sy = min(h - 1, ((rows - 1 - gy) * h) / rows)
+            let y0 = ((rows - 1 - gy) * h) / rows
+            let y1 = max(y0 + 1, ((rows - gy) * h) / rows)
             for gx in 0..<cols {
-                let sx = min(w - 1, (gx * w) / cols)
-                var v = 0.0
-                switch format {
-                case kCVPixelFormatType_OneComponent8:
-                    let p = base.assumingMemoryBound(to: UInt8.self)
-                    v = Double(p[sy * bpr + sx]) / 255.0
-                case kCVPixelFormatType_OneComponent16Half:
-                    // The depth model outputs a grayscale float16 image.
-                    let p = base.assumingMemoryBound(to: Float16.self)
-                    v = Double(p[sy * (bpr / 2) + sx])
-                case kCVPixelFormatType_OneComponent32Float:
-                    let p = base.assumingMemoryBound(to: Float.self)
-                    v = Double(p[sy * (bpr / 4) + sx])
-                case kCVPixelFormatType_TwoComponent32Float:
-                    let p = base.assumingMemoryBound(to: Float.self)
-                    let i = sy * (bpr / 4) + sx * 2
-                    let dx = Double(p[i]), dy = Double(p[i + 1])
-                    v = magnitude ? (dx * dx + dy * dy).squareRoot() : dx
-                case kCVPixelFormatType_TwoComponent16Half:
-                    // 16-bit half floats need no manual decode on Apple silicon:
-                    // Float16 is a real type here.
-                    let p = base.assumingMemoryBound(to: Float16.self)
-                    let i = sy * (bpr / 2) + sx * 2
-                    let dx = Double(p[i]), dy = Double(p[i + 1])
-                    v = magnitude ? (dx * dx + dy * dy).squareRoot() : dx
-                default:
-                    return nil
+                let x0 = (gx * w) / cols
+                let x1 = max(x0 + 1, ((gx + 1) * w) / cols)
+                let stepY = max(1, (y1 - y0) / taps)
+                let stepX = max(1, (x1 - x0) / taps)
+
+                var sum = 0.0
+                var n = 0
+                var sy = y0
+                while sy < y1 && sy < h {
+                    var sx = x0
+                    while sx < x1 && sx < w {
+                        if let v = value(sx, sy), v.isFinite { sum += v; n += 1 }
+                        sx += stepX
+                    }
+                    sy += stepY
                 }
-                guard v.isFinite else { continue }
+                guard n > 0 else { continue }
+                let v = sum / Double(n)
                 out[gy * cols + gx] = v
                 peak = max(peak, abs(v))
             }
         }
         // Flow magnitudes are in pixels and saliency is already 0–1, so normalize
-        // only when the data runs past 1.
-        if peak > 1.0001 {
+        // only when the data runs past 1 — and only when the caller wants a
+        // relative picture at all.
+        if normalize, peak > 1.0001 {
             for i in out.indices { out[i] = abs(out[i]) / peak }
         }
         return out
@@ -188,14 +224,32 @@ final class OpticalFlowLayer: VideoAILayer {
         let handler = VNImageRequestHandler(cvPixelBuffer: small, options: [:])
         try handler.perform([request])
 
+        // Unnormalized: these are displacements in pixels, and they need to stay
+        // that way. Normalising per frame divided every cell by the frame's own
+        // peak, so a motionless scene had its sensor noise scaled up to 1.0 and the
+        // layer cheerfully reported a third of the view in motion while nothing
+        // moved at all. A fixed threshold in pixels is the only honest reading.
         guard let flow = request.results?.first?.pixelBuffer,
-              let grid = MaskGrid.sample(flow, cols: 40, rows: 30, magnitude: true)
+              let raw = MaskGrid.sample(flow, cols: 40, rows: 30,
+                                        magnitude: true, normalize: false)
         else { return nil }
 
-        let moving = grid.filter { $0 > 0.25 }.count
+        /// Displacement, in pixels of the 384-wide working image, below which a cell
+        /// is noise rather than movement.
+        let floor = 0.75
+        /// Displacement that counts as fully lit on the overlay.
+        let ceiling = 12.0
+
+        let moving = raw.filter { $0 >= floor }.count
+        let shaded = raw.map { v -> Double in
+            guard v >= floor else { return 0 }
+            return min(1.0, (v - floor) / (ceiling - floor))
+        }
+
         var out = LayerOutput()
-        out.shapes = [.grid(values: grid, cols: 40, rows: 30, tint: .flow)]
-        out.badge = String(format: "%.0f%%", Double(moving) / Double(grid.count) * 100)
+        out.shapes = [.grid(values: shaded, cols: 40, rows: 30, tint: .flow)]
+        let fraction = Double(moving) / Double(raw.count) * 100
+        out.badge = moving == 0 ? "still" : String(format: "%.0f%% moving", fraction)
         return out
     }
 
@@ -325,15 +379,23 @@ final class TrajectoryLayer: VideoAILayer {
             let projected = path.projectedPoints.map(\.location)
             if detected.count > 1 { out.shapes.append(.polyline(detected, tint: .alert)) }
             if projected.count > 1 { out.shapes.append(.polyline(projected, tint: .warn)) }
-            // Positive curvature upward in a bottom-left system means it is falling.
+
+            // Curvature cannot tell thrown from dropped. In a y-up system gravity
+            // opens every ballistic parabola downward, so `a` is negative for both
+            // and the old test — a < 0 means thrown, a > 0 means falling — could
+            // only ever report "thrown", because a > 0 would mean the object was
+            // accelerating upward. What separates the two is the vertical
+            // direction at the start: thrown rises first, dropped only descends.
             let a = path.equationCoefficients[0]
-            if abs(a) > 0.05, detected.count >= 5 {
-                notes.append(a < 0 ? "object thrown" : "object falling")
-            }
+            guard abs(a) > 0.05, detected.count >= 5 else { continue }
+            let rose = zip(detected, detected.dropFirst()).prefix(3)
+                .contains { $1.y > $0.y + 0.002 }
+            notes.append(rose ? "object thrown" : "object falling")
         }
         reported += notes.count
         out.lines = notes
         out.badge = "\(paths.count)"
+        out.total = reported > 0 ? "\(reported) this session" : nil
         return out
     }
 }
@@ -361,61 +423,137 @@ final class ReIdentificationLayer: VideoAILayer {
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
     private var gallery: [(label: Int, print: VNFeaturePrintObservation, last: Date)] = []
     private var nextLabel = 1
-    /// Feature-print distances are unbounded; this threshold was chosen to be
-    /// conservative, so it under-matches rather than claiming two strangers are
-    /// the same person.
-    private let matchThreshold: Float = 0.62
 
-    func cool() { gallery.removeAll() }
+    /// What the tracker already knows is one person, so appearance does not have to
+    /// rediscover it. A track is the strongest possible evidence that two crops are
+    /// the same person, and tying identity to it is what stopped this layer
+    /// inventing a new stranger every few frames.
+    private struct Pending {
+        var print: VNFeaturePrintObservation
+        var frames: Int
+        var label: Int?
+    }
+    private var byTrack: [Int: Pending] = [:]
+
+    /// Distances between two prints of the *same* track, which is the only
+    /// ground truth available on-device for what "same person" costs in this
+    /// metric. VNFeaturePrintObservation distances are unbounded and their scale
+    /// depends on the revision and the crop, so a hardcoded threshold is a guess;
+    /// this measures the scale instead. Until enough samples exist the layer
+    /// refuses to claim a match rather than claiming a wrong one.
+    private var withinTrack: [Float] = []
+    private var threshold: Float?
+    /// Confirmed on this many consecutive runs before entering the gallery.
+    private let confirmAfter = 3
+
+    func cool() {
+        gallery.removeAll(); byTrack.removeAll()
+        withinTrack.removeAll(); threshold = nil
+    }
 
     func process(_ ctx: FrameContext) throws -> LayerOutput? {
-        let people = ctx.subjects.filter { $0.category == .person }
+        let people = ctx.tracks.filter { $0.category == .person && $0.misses == 0 }
         guard !people.isEmpty else { return nil }
 
         var out = LayerOutput()
         var notes: [String] = []
+        var matchedNow = 0
         let now = Date()
 
-        for person in people {
-            guard person.boundingBox.width > 0.04, person.boundingBox.height > 0.08,
-                  let crop = cropped(ctx.pixelBuffer, to: person.boundingBox) else { continue }
+        for track in people {
+            let box = track.box
+            guard box.width > 0.04, box.height > 0.08,
+                  let crop = cropped(ctx.pixelBuffer, to: box) else { continue }
 
             let handler = VNImageRequestHandler(cgImage: crop, options: [:])
             try handler.perform([request])
             guard let fingerprint = request.results?.first else { continue }
 
+            // Same track, consecutive runs: this is a same-person pair by
+            // construction, so it calibrates the scale of the metric.
+            if var pending = byTrack[track.id] {
+                var d = Float(0)
+                if (try? fingerprint.computeDistance(&d, to: pending.print)) != nil, d.isFinite {
+                    withinTrack.append(d)
+                    if withinTrack.count > 200 { withinTrack.removeFirst() }
+                    recalibrate()
+                }
+                pending.print = fingerprint
+                pending.frames += 1
+                byTrack[track.id] = pending
+            } else {
+                byTrack[track.id] = Pending(print: fingerprint, frames: 1, label: nil)
+            }
+
+            guard var pending = byTrack[track.id] else { continue }
+
+            // A track keeps whatever label it was given; identity is not re-decided
+            // every frame, which is what used to make the count climb.
+            if let label = pending.label {
+                if let i = gallery.firstIndex(where: { $0.label == label }) {
+                    gallery[i].last = now
+                    gallery[i].print = fingerprint
+                }
+                out.shapes.append(.box(box, label: "#\(label)", tint: .warn))
+                matchedNow += 1
+                continue
+            }
+
+            guard pending.frames >= confirmAfter, let limit = threshold else {
+                out.shapes.append(.box(box, label: "…", tint: .neutral))
+                continue
+            }
+
             var best: (label: Int, distance: Float)?
             for entry in gallery {
                 var d = Float(0)
-                guard (try? fingerprint.computeDistance(&d, to: entry.print)) != nil else { continue }
+                guard (try? fingerprint.computeDistance(&d, to: entry.print)) != nil,
+                      d.isFinite else { continue }
                 if best == nil || d < best!.distance { best = (entry.label, d) }
             }
 
-            if let best, best.distance < matchThreshold {
+            if let best, best.distance < limit {
+                pending.label = best.label
+                byTrack[track.id] = pending
                 if let i = gallery.firstIndex(where: { $0.label == best.label }) {
                     gallery[i].last = now
                 }
-                out.shapes.append(.box(person.boundingBox,
-                                       label: String(format: "seen before #%d (%.2f)",
-                                                     best.label, best.distance),
-                                       tint: .warn))
+                out.shapes.append(.box(box, label: "#\(best.label) seen before", tint: .warn))
                 notes.append("appearance match #\(best.label)")
+                matchedNow += 1
             } else {
                 let label = nextLabel
                 nextLabel += 1
+                pending.label = label
+                byTrack[track.id] = pending
                 gallery.append((label, fingerprint, now))
-                out.shapes.append(.box(person.boundingBox, label: "new #\(label)", tint: .person))
+                out.shapes.append(.box(box, label: "#\(label) new", tint: .person))
             }
         }
 
-        // Forget anyone not seen for twenty minutes, or the gallery grows until
-        // every new arrival matches something.
+        // Forget tracks the tracker has dropped and anyone not seen for twenty
+        // minutes, or the gallery grows until every new arrival matches something.
+        let live = Set(ctx.tracks.map(\.id))
+        byTrack = byTrack.filter { live.contains($0.key) }
         gallery.removeAll { now.timeIntervalSince($0.last) > 1200 }
         if gallery.count > 60 { gallery.removeFirst(gallery.count - 60) }
 
         out.lines = notes
-        out.badge = "\(gallery.count)"
+        // Live: people being matched in this frame. Total: how many distinct
+        // appearances are being held. The badge used to be the gallery size, so an
+        // empty scene still read as a crowd.
+        out.badge = matchedNow > 0 ? "\(matchedNow) matched" : "\(people.count) in view"
+        out.total = gallery.isEmpty ? nil : "\(gallery.count) known"
         return out.isEmpty ? nil : out
+    }
+
+    /// Threshold sits above almost every same-person distance seen so far, so a
+    /// match has to be at least as close as this person is to themselves.
+    private func recalibrate() {
+        guard withinTrack.count >= 12 else { return }
+        let mean = withinTrack.reduce(0, +) / Float(withinTrack.count)
+        let variance = withinTrack.reduce(0) { $0 + pow($1 - mean, 2) } / Float(withinTrack.count)
+        threshold = mean + 2 * max(0.01, variance.squareRoot())
     }
 
     private func cropped(_ buffer: CVPixelBuffer, to box: CGRect) -> CGImage? {

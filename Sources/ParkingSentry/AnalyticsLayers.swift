@@ -37,9 +37,14 @@ final class ZoneOccupancyLayer: DerivedAILayer {
             var insideIDs: [Int] = []
             var longest: TimeInterval = 0
 
+            // Standardized: a zone dragged right-to-left or bottom-to-top arrives
+            // with a negative width or height, and `CGRect.contains` is false for
+            // every point in such a rect — so half the zones anyone drew counted
+            // nothing at all and looked simply broken.
+            let area = zone.rect.standardized
             for track in ctx.tracks where track.misses == 0 {
                 let centre = CGPoint(x: track.box.midX, y: track.box.midY)
-                guard zone.rect.contains(centre) else {
+                guard area.contains(centre) else {
                     entered[zone.id]?[track.id] = nil
                     continue
                 }
@@ -59,7 +64,7 @@ final class ZoneOccupancyLayer: DerivedAILayer {
             let label = longest >= 1
                 ? "\(zone.name): \(insideIDs.count) · \(Int(longest))s"
                 : "\(zone.name): \(insideIDs.count)"
-            out.shapes.append(.box(zone.rect, label: label,
+            out.shapes.append(.box(area, label: label,
                                    tint: insideIDs.isEmpty ? .neutral : .warn))
 
             let cooled = now.timeIntervalSince(lastAlert[zone.id] ?? .distantPast) > 20
@@ -142,7 +147,11 @@ final class LineCrossingLayer: DerivedAILayer {
 
         let totalIn = forward.values.reduce(0, +)
         let totalOut = backward.values.reduce(0, +)
-        out.badge = "\(totalIn)/\(totalOut)"
+        // Spelled out rather than "12/3". A counting line's number is meant to be a
+        // running tally, but a bare pair of digits next to a live camera reads as
+        // what is in frame, so it says which it is.
+        out.badge = crossedThisFrame.isEmpty ? "watching" : "crossing"
+        out.total = "\(totalIn) in · \(totalOut) out"
         out.lines = crossedThisFrame
         return out
     }
@@ -166,10 +175,14 @@ final class HeatmapLayer: DerivedAILayer {
     private let rows = 24
     private var grid: [Double]
     private var peak: Double = 0.001
+    private var frames = 0
+    /// Half-life of a cell's weight, in frames. Roughly ten minutes at 30 fps.
+    private let halfLife = 18_000.0
 
     init() { grid = [Double](repeating: 0, count: cols * rows) }
 
     func process(_ ctx: FrameContext) -> LayerOutput? {
+        var occupied = 0
         for track in ctx.tracks where track.misses == 0 {
             // Weight the bottom of the box: that is where a person meets the ground,
             // and a heatmap of torso centres floats oddly above the floor.
@@ -179,20 +192,42 @@ final class HeatmapLayer: DerivedAILayer {
             let cy = min(rows - 1, max(0, Int(y * CGFloat(rows))))
             grid[cy * cols + cx] += 1
             peak = max(peak, grid[cy * cols + cx])
+            occupied += 1
         }
-        guard peak > 0 else { return nil }
+
+        // Decay, so a car parked all morning fades instead of owning the scale for
+        // the rest of the session. Without this `peak` only ever rose and every
+        // later visitor was normalised into invisibility against it.
+        frames += 1
+        if frames % 300 == 0 {
+            let factor = pow(0.5, 300.0 / halfLife)
+            for i in grid.indices { grid[i] *= factor }
+            peak = max(0.001, peak * factor)
+        }
+
+        guard peak > 0.5 else { return nil }
         // Normalize on a log curve, or one parked car saturates the scale and
         // everything else disappears.
         let normalized = grid.map { min(1.0, log1p($0) / log1p(peak)) }
         var out = LayerOutput()
         out.shapes = [.grid(values: normalized, cols: cols, rows: rows, tint: .heat)]
-        out.badge = String(format: "%.0f", grid.reduce(0, +))
+        // Live occupancy, and separately how much of the view has ever been walked
+        // on. The badge used to be the sum of the whole grid — one person standing
+        // still for a minute added 1800 to it, and a toggle reading "1800" beside a
+        // camera showing one person is simply a wrong answer to the question the
+        // number appears to be answering.
+        out.badge = occupied > 0 ? "\(occupied) moving" : "quiet"
+        let touched = grid.filter { $0 > 0.5 }.count
+        out.total = touched > 0
+            ? String(format: "%.0f%% of view used", Double(touched) / Double(grid.count) * 100)
+            : nil
         return out
     }
 
     func clear() {
         grid = [Double](repeating: 0, count: cols * rows)
         peak = 0.001
+        frames = 0
     }
 }
 
@@ -222,25 +257,23 @@ final class BehaviourFlagsLayer: DerivedAILayer {
             // Loitering: present a long time without covering ground. Measured as
             // total displacement against elapsed time, so pacing in one spot still
             // counts as loitering while walking through does not.
-            if age > 45, track.samples.count > 12,
-               let first = track.samples.first?.centre,
-               let last = track.samples.last?.centre {
-                let moved = hypot(last.x - first.x, last.y - first.y)
-                if moved < 0.12, track.category == .person {
-                    findings.append("loitering \(Int(age))s")
-                    out.shapes.append(.box(track.box, label: "loitering \(Int(age))s", tint: .warn))
-                    flagged[track.id] = "loitering"
-                }
+            // `maxExcursion` is how far this track has ever got from where it first
+            // appeared, measured over its whole life. The samples array only spans
+            // three seconds, so the previous version measured three seconds of
+            // movement and called it forty-five — anyone walking slowly across the
+            // frame was flagged for loitering the moment they had been in view long
+            // enough.
+            if age > 45, track.category == .person, track.maxExcursion < 0.12 {
+                findings.append("loitering \(Int(age))s")
+                out.shapes.append(.box(track.box, label: "loitering \(Int(age))s", tint: .warn))
+                flagged[track.id] = "loitering"
             }
 
             // Abandoned object: a non-person, non-vehicle thing that arrived, stopped
             // and has not moved since. A bag left on the ground reads exactly like
             // this; so does a traffic cone, which is why it is a flag and not an alarm.
             if age > 60, track.category != .person, track.category != .vehicle,
-               track.samples.count > 15,
-               let first = track.samples.first?.centre,
-               let last = track.samples.last?.centre,
-               hypot(last.x - first.x, last.y - first.y) < 0.03 {
+               track.maxExcursion < 0.03 {
                 findings.append("stationary \(track.label) \(Int(age))s")
                 out.shapes.append(.box(track.box, label: "left behind?", tint: .warn))
                 flagged[track.id] = "abandoned"
@@ -295,25 +328,42 @@ final class TrendLayer: DerivedAILayer {
 
     private var arrivals: [Date] = []
     private var seen = Set<Int>()
+    private var startedAt = Date()
 
     func process(_ ctx: FrameContext) -> LayerOutput? {
         let now = Date()
-        for track in ctx.tracks where !seen.contains(track.id) && track.hits > 5 {
+        for track in ctx.tracks where !seen.contains(track.id)
+            && track.hits > 5 && track.misses == 0 {
             seen.insert(track.id)
             arrivals.append(now)
         }
-        if seen.count > 4000 { seen.removeAll() }
+        // Drop ids that the tracker itself has forgotten rather than wiping the
+        // whole set at a threshold: a wipe made every track still in frame count as
+        // a fresh arrival the next frame, which put a spike in the trend that
+        // nothing in the scene corresponded to.
+        if seen.count > 4000 {
+            let live = Set(ctx.tracks.map(\.id))
+            seen = seen.filter { live.contains($0) }
+        }
         arrivals.removeAll { now.timeIntervalSince($0) > 3600 }
         guard arrivals.count > 2 else { return nil }
 
         let lastMinute = arrivals.filter { now.timeIntervalSince($0) <= 60 }.count
-        let perMinuteHour = Double(arrivals.count) / 60.0
+        // Divide by the minutes actually observed, not a flat sixty. For the first
+        // hour of any session the window is not full, so dividing by 60 understated
+        // the baseline by up to sixty times and "busier than usual" fired on
+        // essentially every arrival until the app had been watching for an hour.
+        let observedMinutes = max(1.0, min(60.0, now.timeIntervalSince(startedAt) / 60.0))
+        let perMinute = Double(arrivals.count) / observedMinutes
 
         var out = LayerOutput()
         out.badge = "\(lastMinute)/min"
-        if perMinuteHour > 0.5, Double(lastMinute) > perMinuteHour * 2.5 {
+        out.total = String(format: "%.1f/min avg", perMinute)
+        // Needs a real baseline and a real excess before it says anything, and five
+        // minutes of history before it is willing to call anything unusual.
+        if observedMinutes >= 5, perMinute > 0.5, Double(lastMinute) > perMinute * 2.5 {
             out.lines = [String(format: "busier than usual — %d in the last minute vs %.1f/min average",
-                                lastMinute, perMinuteHour)]
+                                lastMinute, perMinute)]
         }
         return out
     }

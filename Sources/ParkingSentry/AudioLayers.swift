@@ -29,6 +29,7 @@ final class SoundHub: NSObject, SNResultsObserving {
     private var analyzer: SNAudioStreamAnalyzer?
     private var classifyRequest: SNClassifySoundRequest?
     private var framePosition: AVAudioFramePosition = 0
+    private var lastSampleTime: AVAudioFramePosition = -1
     private var subscribers = 0
     private let lock = NSLock()
 
@@ -57,6 +58,7 @@ final class SoundHub: NSObject, SNResultsObserving {
         analyzer = nil
         classifyRequest = nil
         framePosition = 0
+        lastSampleTime = -1
         recent.removeAll()
         lock.unlock()
     }
@@ -65,7 +67,10 @@ final class SoundHub: NSObject, SNResultsObserving {
     /// format is known — guessing it and getting it wrong makes the analyzer
     /// silently produce nothing.
     private func prepare(format: AVAudioFormat) {
-        guard analyzer == nil else { return }
+        lock.lock()
+        let needed = analyzer == nil
+        lock.unlock()
+        guard needed else { return }
         do {
             let r = try SNClassifySoundRequest(classifierIdentifier: .version1)
             // Window duration is left at the classifier's own default. It advertises
@@ -77,8 +82,10 @@ final class SoundHub: NSObject, SNResultsObserving {
             // The analyzer holds the observer weakly, so this singleton being the
             // observer is what keeps results flowing.
             try a.add(r, withObserver: self)
+            lock.lock()
             analyzer = a
             classifyRequest = r
+            lock.unlock()
             knownLabels = r.knownClassifications
             startupError = nil
             EventLog.action("sound.classifier.ready", ["labels": r.knownClassifications.count])
@@ -88,11 +95,33 @@ final class SoundHub: NSObject, SNResultsObserving {
         }
     }
 
+    /// Feeds one buffer to the classifier exactly once, however many layers ask.
+    ///
+    /// Both the event layer and the noise-profile layer call this from their own
+    /// `process`, so with both switched on every buffer was submitted twice and the
+    /// frame position advanced twice — the analyzer was told the same audio had
+    /// happened twice in a row at two different times. Every sound was counted
+    /// twice, the profile's rankings were doubled, and the timeline it reasons over
+    /// was wrong by a factor of two. The buffer's own sample time is the identity
+    /// that makes the second call a no-op.
     func analyze(buffer: AVAudioPCMBuffer, at time: AVAudioTime) {
+        lock.lock()
+        let stamp = time.isSampleTimeValid ? time.sampleTime : AVAudioFramePosition(-1)
+        if stamp >= 0, stamp == lastSampleTime {
+            lock.unlock()
+            return
+        }
+        lastSampleTime = stamp
+        lock.unlock()
+
         prepare(format: buffer.format)
-        guard let analyzer else { return }
-        analyzer.analyze(buffer, atAudioFramePosition: framePosition)
+        lock.lock()
+        let active = analyzer
+        let position = framePosition
         framePosition += AVAudioFramePosition(buffer.frameLength)
+        lock.unlock()
+
+        active?.analyze(buffer, atAudioFramePosition: position)
     }
 
     func request(_ request: any SNRequest, didProduce result: any SNResult) {
@@ -166,7 +195,12 @@ final class SoundEventLayer: AudioAILayer {
         let now = Date()
 
         var out = LayerOutput()
-        out.badge = latest.identifier.replacingOccurrences(of: "_", with: " ")
+        // The snapshot holds a minute of history, so the most recent entry in it
+        // can be fifty seconds old. Badging it unconditionally left the name of a
+        // long-finished sound sitting on the toggle in a silent room.
+        out.badge = now.timeIntervalSince(latest.at) < 4
+            ? latest.identifier.replacingOccurrences(of: "_", with: " ")
+            : "listening"
 
         var lines: [String] = []
         for hit in hits where hit.confidence > 0.5 && now.timeIntervalSince(hit.at) < 1.5 {
@@ -251,7 +285,7 @@ final class VoiceActivityLayer: AudioAILayer {
 
     private var speaking = false
     private var runStarted = Date.distantPast
-    private var ambient: Float = -50
+    private var ambient: Float?
 
     func process(buffer: AVAudioPCMBuffer, at time: AVAudioTime) -> LayerOutput? {
         guard let ch = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return nil }
@@ -260,10 +294,20 @@ final class VoiceActivityLayer: AudioAILayer {
         let rms = (sum / Float(buffer.frameLength)).squareRoot()
         let db = 20 * log10(max(rms, 1e-7))
 
+        // Seed the floor from the room rather than from a constant. Starting at a
+        // fixed -50 dB meant that anywhere louder than that — a road, a plant room,
+        // a busy office — opened above the threshold and the slow attack took
+        // minutes to climb out of it, so the layer reported continuous speech in a
+        // room where nobody was talking.
+        guard let current = ambient else {
+            ambient = db
+            return nil
+        }
         // Slow floor, so a conversation does not raise the bar it is measured against.
-        ambient += (db - ambient) * (db < ambient ? 0.05 : 0.002)
+        let ambientNow = current + (db - current) * (db < current ? 0.05 : 0.002)
+        ambient = ambientNow
         let wasSpeaking = speaking
-        speaking = db > ambient + 9
+        speaking = db > ambientNow + 9
 
         var out = LayerOutput()
         out.badge = speaking ? "speaking" : "quiet"
@@ -275,7 +319,7 @@ final class VoiceActivityLayer: AudioAILayer {
         return out
     }
 
-    func reset() { speaking = false; ambient = -50 }
+    func reset() { speaking = false; ambient = nil }
 }
 
 // MARK: - Speech transcription
@@ -299,6 +343,9 @@ final class SpeechHub {
     /// Finalized utterances, newest last.
     private(set) var finals: [String] = []
     private(set) var problem: String?
+    /// The last text committed to `finals`, so a rollover and the task's own final
+    /// result do not both record the same sentence.
+    private var lastCommitted = ""
 
     var isAvailable: Bool { recognizer?.isAvailable ?? false }
     var supportsOnDevice: Bool { recognizer?.supportsOnDeviceRecognition ?? false }
@@ -353,7 +400,12 @@ final class SpeechHub {
             if let result {
                 let text = result.bestTranscription.formattedString
                 self.partial = text
-                if result.isFinal, !text.isEmpty {
+                // A rollover commits the partial and then starts a new task; the
+                // old task's own final arrives afterwards with the same words, so
+                // without this the last sentence before every rollover appeared
+                // twice in the transcript and was fed to the language layers twice.
+                if result.isFinal, !text.isEmpty, text != self.lastCommitted {
+                    self.lastCommitted = text
                     self.finals.append(text)
                     if self.finals.count > 60 { self.finals.removeFirst() }
                     TextBus.shared.add(text, source: "speech")
@@ -374,7 +426,8 @@ final class SpeechHub {
         request.append(buffer)
         // Roll over well before the framework's own one-minute ceiling.
         if Date().timeIntervalSince(startedAt) > 50 {
-            if !partial.isEmpty {
+            if !partial.isEmpty, partial != lastCommitted {
+                lastCommitted = partial
                 finals.append(partial)
                 TextBus.shared.add(partial, source: "speech")
             }
@@ -427,8 +480,14 @@ final class TranscriptionLayer: AudioAILayer {
         guard !partial.isEmpty else { return nil }
         out.badge = "\(partial.split(separator: " ").count)w"
         // Emit only when the tail has actually changed, or the feed fills with
-        // every intermediate guess of the same sentence.
-        if partial != lastEmitted, partial.count > lastEmitted.count + 12 {
+        // every intermediate guess of the same sentence. The length test alone was
+        // not enough: after a rollover the new task's partial starts short again,
+        // and nothing was emitted until it had grown past the length of the whole
+        // previous minute — so transcription appeared to stop after fifty seconds.
+        // A partial that is not an extension of the last one is a new utterance.
+        let continued = partial.hasPrefix(lastEmitted)
+        if partial != lastEmitted,
+           !continued || partial.count > lastEmitted.count + 12 {
             lastEmitted = partial
             out.lines = [partial]
         }

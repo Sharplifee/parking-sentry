@@ -170,8 +170,15 @@ final class SemanticSegmentationLayer: ModelBackedLayer, VideoAILayer {
     private static let outputName = "semanticPredictions"
     private static let side = 448
 
-    private let cols = 56
-    private let rows = 56
+    /// 40x30 rather than 56x56. Every cell is a separate fill in the overlay, and
+    /// this layer emits one grid per class family — at 56x56 with eight families
+    /// that was twenty-five thousand draw operations per frame for a wash that
+    /// conveys the same thing at a third of the resolution.
+    private let cols = 40
+    private let rows = 30
+    /// Families drawn. The rest fold into one neutral mask, because a scene tinted
+    /// eight different colours at once is not readable as anything.
+    private let maxFamilies = 4
     private var scaler: PixelScaler?
     private var lastSummary = ""
 
@@ -235,17 +242,30 @@ final class SemanticSegmentationLayer: ModelBackedLayer, VideoAILayer {
         }
 
         var output = LayerOutput()
-        // One grid per class present, tinted by what kind of thing it is, so the
-        // overlay reads as a scene rather than as noise.
-        var byTint: [LayerTint: [Double]] = [:]
+        // One grid per class family, tinted by what kind of thing it is, so the
+        // overlay reads as a scene rather than as noise — but only the families
+        // that actually cover enough of the view to be worth a colour.
+        var cellsByTint: [LayerTint: Int] = [:]
+        var tintOf = [LayerTint?](repeating: nil, count: cols * rows)
         for (i, cls) in cellClass.enumerated() {
             guard let name = SemanticSegmentationLayer.label(cls) else { continue }
             let tint = SemanticSegmentationLayer.tint(for: name)
-            var grid = byTint[tint] ?? [Double](repeating: 0, count: cols * rows)
-            grid[i] = 0.55
-            byTint[tint] = grid
+            tintOf[i] = tint
+            cellsByTint[tint, default: 0] += 1
         }
-        for (tint, grid) in byTint {
+        let keep = Set(cellsByTint.sorted { $0.value > $1.value }
+            .prefix(maxFamilies).map(\.key))
+
+        var byTint: [LayerTint: [Double]] = [:]
+        for (i, tint) in tintOf.enumerated() {
+            guard let tint else { continue }
+            let target = keep.contains(tint) ? tint : .mask
+            var grid = byTint[target] ?? [Double](repeating: 0, count: cols * rows)
+            grid[i] = 0.45
+            byTint[target] = grid
+        }
+        // Sorted so the draw order of these grids is stable between frames.
+        for (tint, grid) in byTint.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
             output.shapes.append(.grid(values: grid, cols: cols, rows: rows, tint: tint))
         }
 

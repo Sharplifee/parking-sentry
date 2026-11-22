@@ -49,16 +49,21 @@ final class MotionSensorLayer: VideoAILayer {
         let shove = sqrt(acc.x * acc.x + acc.y * acc.y + acc.z * acc.z)
 
         var out = LayerOutput()
-        // A horizon line derived from gravity, which is also a quick way to see the
-        // device is not level on its tripod.
+        // A level line derived from gravity, which is also a quick way to see the
+        // device is not square on its tripod. Only drawn when it is actually off
+        // level: a perfectly horizontal line across a level camera is pure clutter,
+        // and it was previously drawn on every frame on top of the horizon layer's
+        // own line, which looked like a rendering fault.
         let roll = atan2(m.gravity.x, -m.gravity.y)
-        let halfSpan = 0.45
-        let dy = CGFloat(tan(roll)) * CGFloat(halfSpan)
-        out.shapes.append(.polyline([CGPoint(x: 0.5 - halfSpan, y: 0.5 - dy),
-                                     CGPoint(x: 0.5 + halfSpan, y: 0.5 + dy)],
-                                    tint: .neutral))
+        let degrees = roll * 180 / .pi
+        if abs(degrees) > 1.5 {
+            out.shapes.append(.polyline(ctx.levelLine(angle: roll), tint: .neutral))
+        }
 
-        out.badge = String(format: "%.2f rad/s", spin)
+        out.badge = abs(degrees) > 1.5
+            ? String(format: "%.0f° off level", degrees)
+            : "level"
+        out.total = String(format: "%.2f rad/s", spin)
         if spin > 0.35 || shove > 0.3 {
             out.lines = ["camera is moving — scene motion readings are unreliable while it does"]
             out.shapes.append(.label("CAMERA MOVING", at: CGPoint(x: 0.5, y: 0.93), tint: .alert))
@@ -149,17 +154,26 @@ final class DepthLayer: VideoAILayer {
 /// what the governor reacts to, so that is what it reports.
 final class ThermalLayer: VideoAILayer {
     let id = "thermal"
-    let title = "Thermal camera"
-    let detail = "No thermal imager on any iPhone or iPad; shows device thermal state instead."
+    let title = "Device temperature"
+    let detail = "How hot this device is running. No iPhone or iPad has a thermal imager — this is the device's own state, which is what throttles the layers."
     let group = LayerGroup.sensors
     let modality = LayerModality.sensor
-    let availability = LayerAvailability.needsHardware(
-        "No iPhone or iPad has a thermal imager. An external one needs its vendor's SDK.")
+    /// Available, because what it reports is real. It was previously marked as
+    /// unavailable hardware, which meant it could never be switched on and its
+    /// `process` was unreachable — the layer existed only to say no. The device's
+    /// thermal state is genuinely useful here: it is the thing that decides when
+    /// the governor starts stretching intervals, so being able to see it answers
+    /// "why did the overlay slow down".
+    let availability = LayerAvailability.available
     let preferredInterval = 30
 
     func process(_ ctx: FrameContext) throws -> LayerOutput? {
         var out = LayerOutput()
-        out.badge = ThermalLayer.stateName(ProcessInfo.processInfo.thermalState)
+        let state = ProcessInfo.processInfo.thermalState
+        out.badge = ThermalLayer.stateName(state)
+        if state == .serious || state == .critical {
+            out.lines = ["device is \(ThermalLayer.stateName(state)) — layers are being slowed to keep the feed smooth"]
+        }
         return out
     }
 

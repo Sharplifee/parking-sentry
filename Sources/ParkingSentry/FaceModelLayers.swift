@@ -41,7 +41,15 @@ enum FaceCrop {
                              y: box.minY + CGFloat(left.y) * box.height)
             let rp = CGPoint(x: box.minX + CGFloat(right.x) * box.width,
                              y: box.minY + CGFloat(right.y) * box.height)
-            let angle = atan2(rp.y - lp.y, rp.x - lp.x)
+            var angle = atan2(rp.y - lp.y, rp.x - lp.x)
+            // Which pupil Vision calls "left" is the image's left in some
+            // orientations and the subject's in others. Taken literally, the wrong
+            // one gives an angle near π and rotates the face through 180° — the
+            // crop then looks upside down to the model and the embedding is
+            // meaningless, silently. Folding the eye vector onto the rightward
+            // half-plane makes the levelling correct either way.
+            if angle > .pi / 2 { angle -= .pi }
+            if angle < -.pi / 2 { angle += .pi }
             if abs(angle) > 0.03 {
                 let centre = CGPoint(x: box.midX, y: box.midY)
                 let transform = CGAffineTransform(translationX: centre.x, y: centre.y)
@@ -51,12 +59,24 @@ enum FaceCrop {
             }
         }
 
-        // A little margin: these models were trained on crops that include the
-        // chin and hairline, not on a box tight to the features.
-        let padded = box.insetBy(dx: -box.width * 0.12, dy: -box.height * 0.12)
-            .intersection(working.extent)
-        guard padded.width > 24, padded.height > 24 else { return nil }
-        guard let cropped = context.createCGImage(working, from: padded) else { return nil }
+        // A square crop around the face, not the face box stretched to a square.
+        //
+        // Vision's face boxes are noticeably taller than they are wide. Drawing one
+        // into a square context squashed every face horizontally by about a fifth
+        // before the model ever saw it — which both models read as a different face
+        // shape, and it is the sort of error that leaves recognition merely
+        // mediocre rather than visibly broken.
+        //
+        // The margin is because these models were trained on crops that include the
+        // chin and hairline, not on a box tight to the features. `clampedToExtent`
+        // means a face near the edge of the frame still yields a square crop
+        // instead of a clipped, and therefore distorted, one.
+        let cropSide = max(box.width, box.height) * 1.24
+        let square = CGRect(x: box.midX - cropSide / 2, y: box.midY - cropSide / 2,
+                            width: cropSide, height: cropSide)
+        guard square.width > 24, square.height > 24 else { return nil }
+        guard let cropped = context.createCGImage(working.clampedToExtent(),
+                                                  from: square) else { return nil }
 
         // Square it off at the model's input size.
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
@@ -83,8 +103,13 @@ enum FaceCrop {
               let buffer else { return nil }
         CVPixelBufferLockBaseAddress(buffer, [])
         defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+        // Gamma-encoded gray, not linear. `linearGray` always resolves, so the
+        // fallback in the old `??` chain was dead code and every crop was handed to
+        // the model in linear light — roughly a stop and a half darker in the
+        // midtones than the gamma-encoded images FER+ was trained on, which skews
+        // the expression it picks without ever looking like a failure.
         guard let base = CVPixelBufferGetBaseAddress(buffer),
-              let space = CGColorSpace(name: CGColorSpace.linearGray) ?? CGColorSpace(name: CGColorSpace.genericGrayGamma2_2),
+              let space = CGColorSpace(name: CGColorSpace.genericGrayGamma2_2),
               let ctx = CGContext(data: base, width: side, height: side,
                                   bitsPerComponent: 8,
                                   bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
@@ -125,16 +150,30 @@ final class FaceIdentityLayer: ModelBackedLayer, VideoAILayer {
         var lastSeen: Date
     }
 
-    private let request: VNDetectFaceLandmarksRequest = {
-        // Landmarks rather than plain rectangles: the eyes are what the alignment
-        // needs, and alignment is most of the accuracy.
-        VNDetectFaceLandmarksRequest()
-    }()
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
     private var gallery: [Known] = []
     private var nextLabel = 1
     private var loaded = false
     private var lastAlert = Date.distantPast
+    private var lastSaved = Date.distantPast
+
+    /// A face that matched nothing, held back until it turns up again.
+    ///
+    /// Enrolling on a single sighting was the whole problem. One bad crop — a
+    /// profile, a moment of backlight, someone half out of frame — produces an
+    /// embedding that matches nothing, and the layer minted a new identity for it,
+    /// announced "a face not seen before", and did it again on the next run. One
+    /// person standing at a door became a dozen strangers in a minute, and the
+    /// toggle's own count said so.
+    private struct Provisional {
+        var vector: [Float]
+        var sightings: Int
+        var at: Date
+    }
+    private var provisional: [Provisional] = []
+    /// Unmatched faces have to agree with each other this many times before they
+    /// are accepted as a genuinely new person.
+    private let enrolAfter = 3
 
     /// SFace embeddings are compared by cosine. Same person typically lands above
     /// 0.4 and different people below 0.3; 0.363 is the threshold OpenCV ships
@@ -182,12 +221,17 @@ final class FaceIdentityLayer: ModelBackedLayer, VideoAILayer {
         guard let model = ModelStore.shared.model(modelID) else { ensureModel(); return nil }
         loadGallery()
 
-        try ctx.handler.perform([request])
-        guard let faces = request.results, !faces.isEmpty else { return nil }
+        let faces = try ctx.shared.faceLandmarks()
+        guard !faces.isEmpty else { return nil }
 
         var out = LayerOutput()
         var notes: [String] = []
+        var familiarNow = 0
+        var strangersNow = 0
         let now = Date()
+        // A provisional sighting that is not reinforced within a few seconds was a
+        // bad crop, not a person.
+        provisional.removeAll { now.timeIntervalSince($0.at) > 8 }
 
         for face in faces {
             guard face.boundingBox.width > 0.04,
@@ -215,22 +259,45 @@ final class FaceIdentityLayer: ModelBackedLayer, VideoAILayer {
                 }
                 let entry = gallery[best.index]
                 let familiar = entry.sightings >= familiarAfter
+                if familiar { familiarNow += 1 } else { strangersNow += 1 }
                 out.shapes.append(.box(face.boundingBox,
                                        label: familiar
                                            ? "#\(entry.label) familiar"
                                            : "#\(entry.label) seen \(entry.sightings)x",
                                        tint: familiar ? .person : .face))
-            } else {
-                let label = nextLabel
-                nextLabel += 1
-                gallery.append(Known(label: label, vector: vector, sightings: 1,
-                                     firstSeen: now, lastSeen: now))
-                out.shapes.append(.box(face.boundingBox, label: "#\(label) new", tint: .alert))
-                notes.append("a face not seen before (#\(label))")
-                if now.timeIntervalSince(lastAlert) > 60 {
-                    lastAlert = now
-                    out.alert = "Unfamiliar face"
+            } else if let i = provisional.firstIndex(where: {
+                cosine(vector, $0.vector) >= matchThreshold
+            }) {
+                // Seen this unknown face before, recently. Average the vectors so
+                // the entry that eventually enrols is not one unlucky frame.
+                provisional[i].sightings += 1
+                provisional[i].at = now
+                for k in provisional[i].vector.indices {
+                    provisional[i].vector[k] = provisional[i].vector[k] * 0.6 + vector[k] * 0.4
                 }
+                strangersNow += 1
+
+                if provisional[i].sightings >= enrolAfter {
+                    let label = nextLabel
+                    nextLabel += 1
+                    gallery.append(Known(label: label, vector: provisional[i].vector,
+                                         sightings: provisional[i].sightings,
+                                         firstSeen: now, lastSeen: now))
+                    provisional.remove(at: i)
+                    out.shapes.append(.box(face.boundingBox, label: "#\(label) new",
+                                           tint: .alert))
+                    notes.append("a face not seen before (#\(label))")
+                    if now.timeIntervalSince(lastAlert) > 60 {
+                        lastAlert = now
+                        out.alert = "Unfamiliar face"
+                    }
+                } else {
+                    out.shapes.append(.box(face.boundingBox, label: "…", tint: .face))
+                }
+            } else {
+                provisional.append(Provisional(vector: vector, sightings: 1, at: now))
+                strangersNow += 1
+                out.shapes.append(.box(face.boundingBox, label: "…", tint: .face))
             }
         }
 
@@ -238,9 +305,29 @@ final class FaceIdentityLayer: ModelBackedLayer, VideoAILayer {
         // until everything matches something.
         gallery.removeAll { now.timeIntervalSince($0.lastSeen) > 14 * 86_400 }
         if gallery.count > 300 { gallery.removeFirst(gallery.count - 300) }
-        if Int(now.timeIntervalSince1970) % 30 == 0 { saveGallery() }
+        // Elapsed time, not a modulo of the wall clock. The old test only saved on
+        // the handful of runs that happened to land on an exact multiple of thirty
+        // seconds, so whether the gallery survived the app being killed came down
+        // to timing luck.
+        if now.timeIntervalSince(lastSaved) > 30 {
+            lastSaved = now
+            saveGallery()
+        }
 
-        out.badge = "\(gallery.count) known"
+        // Live: who is in front of the camera. Total: how big the stored gallery
+        // is. These used to be one number — the gallery size — so the toggle read
+        // "37 known" with nobody in the room, which is a true statement about the
+        // database and a false one about the scene.
+        if familiarNow > 0 && strangersNow > 0 {
+            out.badge = "\(familiarNow) known · \(strangersNow) not"
+        } else if familiarNow > 0 {
+            out.badge = "\(familiarNow) familiar"
+        } else if strangersNow > 0 {
+            out.badge = "\(strangersNow) unrecognised"
+        } else {
+            out.badge = "\(faces.count) face\(faces.count == 1 ? "" : "s")"
+        }
+        out.total = gallery.isEmpty ? nil : "\(gallery.count) on file"
         out.lines = notes
         return out.isEmpty ? nil : out
     }
@@ -284,14 +371,12 @@ final class FaceIdentityLayer: ModelBackedLayer, VideoAILayer {
 /// free, and is often the more useful of the two for a camera watching a doorway —
 /// where someone is looking matters more than how they feel about it.
 ///
-/// Age and gender are deliberately absent. Models for both exist and would have
-/// been no harder to add than this one; they are also wrong often enough that
-/// acting on their output is a bad idea, and a sentry camera labelling people by
-/// age and gender is a feature worth not building.
+/// Age and gender live in their own layer rather than here, so they can be left
+/// off independently of expression.
 final class FaceAttributesLayer: ModelBackedLayer, VideoAILayer {
     let id = "faces.attributes"
     let title = "Face attributes"
-    let detail = "Expression and head pose per face. No age or gender — see the note."
+    let detail = "Expression and head pose per face."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     var availability: LayerAvailability { modelAvailability }
@@ -302,7 +387,6 @@ final class FaceAttributesLayer: ModelBackedLayer, VideoAILayer {
     private static let emotions = ["neutral", "happy", "surprised", "sad",
                                    "angry", "disgusted", "afraid", "contemptuous"]
 
-    private let request = VNDetectFaceLandmarksRequest()
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
     private var lastReported = ""
 
@@ -313,8 +397,8 @@ final class FaceAttributesLayer: ModelBackedLayer, VideoAILayer {
     func process(_ ctx: FrameContext) throws -> LayerOutput? {
         guard let model = ModelStore.shared.model(modelID) else { ensureModel(); return nil }
 
-        try ctx.handler.perform([request])
-        guard let faces = request.results, !faces.isEmpty else { return nil }
+        let faces = try ctx.shared.faceLandmarks()
+        guard !faces.isEmpty else { return nil }
 
         var out = LayerOutput()
         var headline: String?
@@ -332,13 +416,18 @@ final class FaceAttributesLayer: ModelBackedLayer, VideoAILayer {
             }
 
             // Free from Vision, and these are NSNumber? rather than Float.
+            //
+            // Reported as a magnitude rather than as "looking left" or "looking
+            // right". Vision does not document which way positive yaw points, and
+            // the two readings are opposites — getting it backwards would be an
+            // assertion about where someone was looking that happened to be exactly
+            // wrong, every time, with nothing on screen to suggest it. The angle
+            // itself is unambiguous and answers the same question.
             if let yaw = face.yaw?.doubleValue {
-                let degrees = yaw * 180 / .pi
-                if abs(degrees) > 20 {
-                    parts.append(degrees > 0 ? "looking right" : "looking left")
-                } else {
-                    parts.append("facing camera")
-                }
+                let degrees = abs(yaw * 180 / .pi)
+                parts.append(degrees > 20
+                             ? String(format: "turned %.0f°", degrees)
+                             : "facing camera")
             }
             if let quality = face.faceCaptureQuality, quality < 0.3 {
                 parts.append("poor view")
@@ -382,6 +471,182 @@ final class FaceAttributesLayer: ModelBackedLayer, VideoAILayer {
             return (FaceAttributesLayer.emotions[bestIndex], exps[bestIndex])
         } catch {
             EventLog.error(error, name: "faces.emotion.failed")
+            return nil
+        }
+    }
+}
+
+// MARK: - Age and gender
+
+/// An age bracket and a gender guess per face.
+///
+/// Two Levi-Hassner GoogleNets from the ONNX model zoo, trained on Adience and
+/// converted here. Age is eight coarse brackets rather than a number, because
+/// brackets are what the model actually predicts — anything reported to the year
+/// would be arithmetic dressed up as measurement.
+///
+/// What this is worth, measured rather than assumed. Run over labelled faces during
+/// the conversion, gender came out 9 for 9 and age was plainly rough: a toddler of
+/// about two landed in "4–6", a bearded man in his thirties in "15–20", someone in
+/// their early thirties in "60–100" at 81% confidence. So gender is reported when
+/// the model is confident, age is always shown as the bracket with its confidence,
+/// and neither is ever stated as fact. Both are off by default and switch off
+/// independently of expression.
+///
+/// The channel order is worth recording because it is the kind of mistake that
+/// leaves a model merely mediocre instead of visibly broken. The zoo's README says
+/// BGR; the zoo's own example script converts to RGB. Running both ways over the
+/// labelled faces settled it — BGR scored 9/9 with 0.998 mean confidence, RGB
+/// scored 8/9 and called a bearded man female at 0.99 — so the model is fed BGR and
+/// the example script is simply wrong.
+final class AgeGenderLayer: VideoAILayer {
+    let id = "faces.ageGender"
+    let title = "Age & gender estimate"
+    let detail = "A coarse age bracket and a gender guess per face. Often wrong — shown with its confidence."
+    let group = LayerGroup.vision
+    let modality = LayerModality.video
+    let preferredInterval = 12
+    let warmAtLaunch = false
+
+    private static let ageModel = "faces.age"
+    private static let genderModel = "faces.gender"
+    private static let brackets = ["0–2", "4–6", "8–12", "15–20",
+                                   "25–32", "38–43", "48–53", "60+"]
+    private static let genders = ["male", "female"]
+
+    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+
+    /// Smoothed probabilities per face, matched between runs by overlap.
+    ///
+    /// A single frame's answer jumps between neighbouring brackets, and a caption
+    /// that flips twice a second reads as a broken feature rather than an uncertain
+    /// one. Averaging over the last few runs of the same face costs nothing and is
+    /// also simply a better estimate than any one of them.
+    private struct Smoothed {
+        var box: CGRect
+        var age: [Float]
+        var gender: [Float]
+        var runs: Int
+        var at: Date
+    }
+    private var tracked: [Smoothed] = []
+
+    var availability: LayerAvailability {
+        let states = [ModelStore.shared.state(AgeGenderLayer.ageModel),
+                      ModelStore.shared.state(AgeGenderLayer.genderModel)]
+        if states.allSatisfy({ if case .ready = $0 { return true }; return false }) {
+            return .available
+        }
+        for state in states {
+            if case .failed(let why) = state { return .modelMissing("Download failed: \(why)") }
+        }
+        for state in states {
+            if case .downloading(let f) = state {
+                return .needsDownload(String(format: "Downloading… %.0f%%", f * 100))
+            }
+            if case .compiling = state { return .needsDownload("Compiling on device…") }
+        }
+        let mb = ((ModelStore.manifest[AgeGenderLayer.ageModel]?.totalBytes ?? 0)
+                  + (ModelStore.manifest[AgeGenderLayer.genderModel]?.totalBytes ?? 0)) / 1_000_000
+        return .needsDownload("Needs \(mb) MB of models — switch on to download them once")
+    }
+
+    func warm() {
+        for id in [AgeGenderLayer.ageModel, AgeGenderLayer.genderModel] {
+            if case .ready = ModelStore.shared.state(id) { continue }
+            ModelStore.shared.fetch(id)
+        }
+    }
+
+    func cool() { tracked.removeAll() }
+
+    func process(_ ctx: FrameContext) throws -> LayerOutput? {
+        guard let ageModel = ModelStore.shared.model(AgeGenderLayer.ageModel),
+              let genderModel = ModelStore.shared.model(AgeGenderLayer.genderModel) else {
+            warm()
+            return nil
+        }
+
+        let faces = try ctx.shared.faceLandmarks()
+        guard !faces.isEmpty else { tracked.removeAll(); return nil }
+
+        let now = Date()
+        tracked.removeAll { now.timeIntervalSince($0.at) > 3 }
+
+        var out = LayerOutput()
+        var described = 0
+
+        for face in faces {
+            // Below this the crop is mostly interpolation and the answer is noise.
+            guard face.boundingBox.width > 0.05,
+                  let crop = FaceCrop.aligned(face: face, in: ctx.pixelBuffer,
+                                              context: ciContext, side: 224),
+                  let buffer = CLIPEngine.pixelBuffer(from: crop, width: 224, height: 224)
+            else { continue }
+
+            guard let ages = probabilities(buffer, model: ageModel,
+                                           output: "age_probs", count: 8),
+                  let genders = probabilities(buffer, model: genderModel,
+                                              output: "gender_probs", count: 2)
+            else { continue }
+
+            // Match to a face from the previous run by overlap, and average.
+            let box = face.boundingBox
+            var smoothed: Smoothed
+            if let i = tracked.firstIndex(where: { iou($0.box, box) > 0.3 }) {
+                var existing = tracked[i]
+                let w = Float(min(0.5, 1.0 / Double(existing.runs + 1)))
+                for k in 0..<8 { existing.age[k] = existing.age[k] * (1 - w) + ages[k] * w }
+                for k in 0..<2 { existing.gender[k] = existing.gender[k] * (1 - w) + genders[k] * w }
+                existing.box = box
+                existing.runs += 1
+                existing.at = now
+                tracked[i] = existing
+                smoothed = existing
+            } else {
+                smoothed = Smoothed(box: box, age: ages, gender: genders, runs: 1, at: now)
+                tracked.append(smoothed)
+            }
+
+            var parts: [String] = []
+            let gi = smoothed.gender.indices.max(by: { smoothed.gender[$0] < smoothed.gender[$1] }) ?? 0
+            // Gender is only stated when the model is actually confident. Below
+            // this it is a coin toss and saying so is worse than saying nothing.
+            if smoothed.gender[gi] > 0.75 {
+                parts.append(String(format: "%@ %.0f%%",
+                                    AgeGenderLayer.genders[gi], smoothed.gender[gi] * 100))
+            }
+            let ai = smoothed.age.indices.max(by: { smoothed.age[$0] < smoothed.age[$1] }) ?? 0
+            parts.append(String(format: "%@ %.0f%%",
+                                AgeGenderLayer.brackets[ai], smoothed.age[ai] * 100))
+
+            described += 1
+            out.shapes.append(.box(box, label: parts.joined(separator: " · "), tint: .face))
+        }
+
+        guard described > 0 else { return nil }
+        out.badge = "\(described) estimated"
+        return out
+    }
+
+    private func probabilities(_ buffer: CVPixelBuffer, model: MLModel,
+                               output: String, count: Int) -> [Float]? {
+        do {
+            let provider = try MLDictionaryFeatureProvider(
+                dictionary: ["face": MLFeatureValue(pixelBuffer: buffer)])
+            let result = try model.prediction(from: provider)
+            guard let array = result.featureValue(for: output)?.multiArrayValue,
+                  array.count >= count else { return nil }
+            // Both graphs end in a Softmax, so these are already probabilities and
+            // applying another one here would flatten them towards uniform.
+            var values = [Float](repeating: 0, count: count)
+            array.withUnsafeBytes { raw in
+                guard let base = raw.baseAddress?.assumingMemoryBound(to: Float.self) else { return }
+                for i in 0..<count { values[i] = base[i] }
+            }
+            return values
+        } catch {
+            EventLog.error(error, name: "faces.ageGender.failed")
             return nil
         }
     }

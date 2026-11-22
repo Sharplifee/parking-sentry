@@ -170,11 +170,11 @@ final class FaceLayer: VideoAILayer {
     let modality = LayerModality.video
     let availability = LayerAvailability.available
 
-    private let request = VNDetectFaceRectanglesRequest()
-
     func process(_ ctx: FrameContext) throws -> LayerOutput? {
-        try ctx.handler.perform([request])
-        guard let faces = request.results, !faces.isEmpty else { return nil }
+        // Shared with every other face layer: one detection per frame, not one per
+        // layer. With the face group switched on this used to run five times.
+        let faces = try ctx.shared.faceRects()
+        guard !faces.isEmpty else { return nil }
 
         var out = LayerOutput()
         for face in faces {
@@ -207,11 +207,9 @@ final class FaceLandmarkLayer: VideoAILayer {
     let availability = LayerAvailability.available
     let preferredInterval = 2
 
-    private let request = VNDetectFaceLandmarksRequest()
-
     func process(_ ctx: FrameContext) throws -> LayerOutput? {
-        try ctx.handler.perform([request])
-        guard let faces = request.results, !faces.isEmpty else { return nil }
+        let faces = try ctx.shared.faceLandmarks()
+        guard !faces.isEmpty else { return nil }
 
         var out = LayerOutput()
         for face in faces {
@@ -277,9 +275,11 @@ final class SceneTextLayer: VideoAILayer {
             strings.append(top.string)
         }
         // Only report text that is new, or the feed fills with the same sign.
+        // `lastSeen` is this frame's strings and nothing else, so it is bounded by
+        // what is in view and needs no separate cap — the line that used to be here
+        // reassigned it to the value it had just been given, which did nothing.
         let fresh = strings.filter { !lastSeen.contains($0) }
         lastSeen = Set(strings)
-        if lastSeen.count > 200 { lastSeen = Set(strings) }
         out.lines = fresh
         out.badge = strings.isEmpty ? nil : "\(strings.count)"
         return out
@@ -320,6 +320,7 @@ final class PlateLayer: VideoAILayer {
 
         var out = LayerOutput()
         var hits: [String] = []
+        var inFrame = 0
 
         for obs in found {
             guard let top = obs.topCandidates(3).first(where: { PlateLayer.looksLikePlate($0.string) })
@@ -332,6 +333,7 @@ final class PlateLayer: VideoAILayer {
 
             let plate = PlateLayer.normalize(top.string)
             seen[plate, default: 0] += 1
+            inFrame += 1
             out.shapes.append(.box(box, label: plate, tint: .text))
             if seen[plate] ?? 0 >= 3, !reported.contains(plate) {
                 reported.insert(plate)
@@ -339,10 +341,21 @@ final class PlateLayer: VideoAILayer {
             }
         }
 
-        if seen.count > 400 { seen.removeAll() }
+        // Evicting the least-confirmed entries rather than wiping the table: the
+        // previous `removeAll` threw away every partial confirmation at once, so a
+        // plate that had been read twice started again from zero and a busy lot
+        // could keep resetting plates that were one frame from being reported.
+        if seen.count > 400 {
+            let keep = seen.sorted { $0.value > $1.value }.prefix(200)
+            seen = Dictionary(uniqueKeysWithValues: keep.map { ($0.key, $0.value) })
+        }
         out.lines = hits
-        out.badge = reported.isEmpty ? nil : "\(reported.count)"
-        return out
+        // Live: how many plate-shaped strings are on screen. Total: how many
+        // distinct plates have been confirmed this session. These used to be the
+        // same number, so an empty driveway still showed the night's running tally.
+        out.badge = inFrame > 0 ? "\(inFrame)" : nil
+        out.total = reported.isEmpty ? nil : "\(reported.count) seen"
+        return out.isEmpty ? nil : out
     }
 
     static func normalize(_ s: String) -> String {
@@ -391,8 +404,12 @@ final class BarcodeLayer: VideoAILayer {
                 fresh.append("\(code.symbology.rawValue): \(payload)")
             }
         }
+        // Bounded: this is a dedupe set, not a log, and a camera pointed at a shelf
+        // of barcodes would otherwise grow it without limit for the whole session.
+        if reported.count > 500 { reported.removeAll() }
         out.lines = fresh
         out.badge = "\(codes.count)"
+        out.total = reported.count > codes.count ? "\(reported.count) seen" : nil
         return out
     }
 }
@@ -477,12 +494,9 @@ final class HorizonLayer: VideoAILayer {
     func process(_ ctx: FrameContext) throws -> LayerOutput? {
         try ctx.handler.perform([request])
         guard let h = request.results?.first else { return nil }
-        let angle = h.angle
-        let half = 0.5
-        let dy = CGFloat(tan(angle)) * CGFloat(half)
+        let angle = Double(h.angle)
         var out = LayerOutput()
-        out.shapes = [.polyline([CGPoint(x: 0.5 - half, y: 0.5 - dy),
-                                 CGPoint(x: 0.5 + half, y: 0.5 + dy)], tint: .neutral)]
+        out.shapes = [.polyline(ctx.levelLine(angle: angle), tint: .neutral)]
         out.badge = String(format: "%.1f°", angle * 180 / .pi)
         return out
     }
@@ -541,7 +555,13 @@ final class ColourAttributeLayer: DerivedAILayer {
         var out = LayerOutput()
         for s in ctx.subjects {
             guard let name = dominantColourName(in: s.boundingBox, ctx: ctx) else { continue }
-            out.shapes.append(.box(s.boundingBox, label: "\(name) \(s.label)", tint: .primary))
+            // A label, not another box. The object layer has already outlined this
+            // exact subject, and two layers stroking the same rectangle produced a
+            // doubled outline and two captions fighting for the same corner.
+            out.shapes.append(.label("\(name) \(s.label)",
+                                     at: CGPoint(x: s.boundingBox.midX,
+                                                 y: s.boundingBox.minY - 0.012),
+                                     tint: .primary))
         }
         out.badge = out.shapes.isEmpty ? nil : "\(out.shapes.count)"
         return out
@@ -602,23 +622,38 @@ final class ColourAttributeLayer: DerivedAILayer {
         // Hue from the chroma vector, in the Cb/Cr plane.
         var hue = atan2(cr, cb) * 180 / .pi
         if hue < 0 { hue += 360 }
+
+        // Boundaries are the midpoints between the measured hue angles of the pure
+        // colours under BT.601, which is the matrix the capture hardware uses:
+        //
+        //   magenta 51.6   red 108.6   orange 139.1   yellow 170.8
+        //   green 231.6    teal 288.6  blue 350.8
+        //
+        // The previous table was rotated by roughly a quadrant and got every single
+        // name wrong — red came back "purple", blue came back "teal", green came
+        // back "brown" and yellow came back "red". It reads like it was written
+        // against atan2(cb, cr) rather than atan2(cr, cb).
         switch hue {
-        case 0..<25, 345..<360: return "teal"
-        case 25..<80:           return "blue"
-        case 80..<135:          return luma < 90 ? "navy" : "purple"
-        case 135..<200:         return "red"
-        case 200..<250:         return luma > 150 ? "orange" : "brown"
-        case 250..<290:         return "yellow"
-        default:                return "green"
+        case 21..<80:            return luma > 150 ? "pink" : "purple"
+        case 80..<124:           return "red"
+        case 124..<155:          return luma < 110 ? "brown" : "orange"
+        case 155..<201:          return "yellow"
+        case 201..<260:          return "green"
+        case 260..<320:          return "teal"
+        default:                 return luma < 70 ? "navy" : "blue"
         }
     }
 }
 
 // MARK: - Declared unavailable, with the reason
 
-/// These five appear in the panel so the question "was this built?" has a visible
-/// answer. Apple ships no public API for any of them and no model is bundled, so
-/// they cannot be switched on. Each one's reason says what it would take.
+/// A layer that exists in the list so the question "was this built?" has a visible
+/// answer, but cannot be switched on. The reason says what it would take.
+///
+/// Nothing in the vision group uses this any more — age and gender estimation was
+/// the last entry and is now a real layer backed by converted models. The type
+/// stays because it is the honest way to list a capability this device cannot do,
+/// and inventing it again under pressure would be worse than keeping it.
 final class UnavailableLayer: AILayer {
     let id: String
     let title: String
@@ -638,13 +673,4 @@ final class UnavailableLayer: AILayer {
         self.availability = availability
     }
 
-    static func visionGaps() -> [AILayer] {
-        [
-            UnavailableLayer(
-                id: "faces.ageGender", title: "Age and gender estimation",
-                detail: "Guessing a person's age bracket and gender from their face.",
-                group: .vision,
-                availability: .noPublicAPI("Deliberately not built. Models for this exist and would have been no harder to add than the expression one; they are also wrong often enough that acting on their output is a bad idea, and a sentry camera labelling people by age and gender is a feature worth not building. Expression and head pose are under Face attributes."))
-        ]
-    }
 }
