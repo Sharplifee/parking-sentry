@@ -20,8 +20,19 @@ final class AudioMonitor {
     private let splOffset: Float = 120.0
 
     /// Rolling background level, so "loud" means loud *for this place*.
-    private var ambient: Float = 45
+    ///
+    /// Seeded from the first buffer rather than from a constant. Starting at a
+    /// fixed 45 dB meant that anywhere genuinely louder than that — a road, a
+    /// plant room, a busy shop — sat permanently above the transient margin, and
+    /// because a transient deliberately suppresses learning, the estimate could
+    /// never climb out of it. The trigger latched on, the Vision pass was woken on
+    /// every single frame, and the battery went with it.
+    private var ambient: Float?
     private let ambientAlpha: Float = 0.02
+    /// Ambient still creeps during a sustained transient, far more slowly. Without
+    /// this the suppression above is a trap: anything loud enough to trigger also
+    /// prevents the estimate from ever catching up to it.
+    private let ambientAlphaDuringTransient: Float = 0.0015
 
     private(set) var currentDB: Float = 0
     private(set) var peakDB: Float = 0
@@ -56,12 +67,17 @@ final class AudioMonitor {
     }
 
     func stop() {
-        Task { @MainActor in AudioSessionCoordinator.shared.endMetering() }
+        // Guard first. Releasing the shared audio session on a stop() that was a
+        // no-op could tear metering out from under whatever still had it.
         guard running else { return }
+        Task { @MainActor in AudioSessionCoordinator.shared.endMetering() }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         running = false
         transient = false
+        // Relearn on the next start: the device may have been moved somewhere
+        // with a completely different noise floor.
+        ambient = nil
     }
 
     private func process(_ buffer: AVAudioPCMBuffer) {
@@ -82,14 +98,21 @@ final class AudioMonitor {
         currentDB = spl
         peakDB = peakSPL
 
-        if spl > ambient + transientMarginDB {
+        guard let current = ambient else {
+            ambient = spl
+            return
+        }
+
+        if spl > current + transientMarginDB {
             transientUntil = Date().addingTimeInterval(1.5)
-            // Do not let the spike itself drag the ambient estimate up.
+            // The spike must not drag the estimate up at the normal rate, but it
+            // cannot be allowed to freeze it either.
+            ambient = current + (spl - current) * ambientAlphaDuringTransient
         } else {
-            ambient += (spl - ambient) * ambientAlpha
+            ambient = current + (spl - current) * ambientAlpha
         }
         transient = Date() < transientUntil
     }
 
-    var ambientDB: Float { ambient }
+    var ambientDB: Float { ambient ?? 0 }
 }

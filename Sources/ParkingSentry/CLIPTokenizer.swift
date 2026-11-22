@@ -47,8 +47,22 @@ final class CLIPTokenizer {
         var merges: [String] = []
         merges.reserveCapacity(49_000)
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            // The first line is a version comment in the upstream file.
-            if line.hasPrefix("#") { continue }
+            // A merge rule is exactly two space-separated tokens. That alone
+            // excludes the upstream version header, which has six.
+            //
+            // It must not be done by testing for a leading "#". Six real merge
+            // rules in this file begin with the hash character — "# #</w>",
+            // "# :</w>", "# @</w>", "# ...</w>" and two others — and skipping
+            // them as comments dropped the vocabulary to 49,402. That failed the
+            // `ids.count == 49_408` check, so the tokenizer never became ready
+            // and every CLIP text feature quietly did nothing: find-anything,
+            // cross-modal retrieval and the "Find something" preset all looked
+            // switched on and returned no result, ever.
+            //
+            // Worse than the count: dropping a merge shifts the rank of every
+            // later one and the id of every later vocabulary entry, so even with
+            // the count check removed the ids would have been wrong for most of
+            // the vocabulary and the embeddings meaningless.
             let parts = line.split(separator: " ")
             guard parts.count == 2 else { continue }
             let joined = String(parts[0]) + String(parts[1])
@@ -155,8 +169,13 @@ final class CLIPTokenizer {
         return map
     }
 
-    /// The 256 base characters in the order CLIP's vocabulary expects, which is
-    /// the byte order, not the character order.
+    /// The 256 base characters in the order CLIP's vocabulary expects.
+    ///
+    /// That order is the order `bytesToUnicode` inserts them — printable ASCII,
+    /// then 0xA1–0xAC, then 0xAE–0xFF, then the remaining bytes appended — and not
+    /// numeric byte order. Sorting by byte value instead gives the same 256
+    /// characters in the wrong sequence, which would shift the first 512
+    /// vocabulary ids. Verified entry by entry against the real vocab.json.
     static func orderedByteChars(_ map: [UInt8: String]) -> [String] {
         var bs: [Int] = []
         bs.append(contentsOf: Int(UInt8(ascii: "!"))...Int(UInt8(ascii: "~")))
