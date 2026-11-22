@@ -20,6 +20,8 @@ struct ContentView: View {
     @State private var showLayers = false
     @ObservedObject private var layers = LayerRegistry.shared
     @State private var drawMode: DrawMode?
+    @State private var statusExpanded = false
+    @State private var panelFocus: LayerGroup?
 
     var body: some View {
         ZStack {
@@ -92,18 +94,40 @@ struct ContentView: View {
                     .environmentObject(settings)
             }
 
-            VStack {
-                telemetry
-                Spacer()
+            // Chrome: status on top, tools down the right edge, the layer dock
+            // and the one big control at the bottom. Nothing important lives in
+            // a menu any more.
+            VStack(spacing: Style.gap) {
+                StatusBar(expanded: $statusExpanded)
+                    .environmentObject(engine)
+
+                HStack(alignment: .top) {
+                    Spacer()
+                    ToolRail(drawMode: $drawMode,
+                             onFlip: { engine.flipCamera(); pinchStart = 1 },
+                             onStealth: { enterStealth() },
+                             onWall: { showWall = true })
+                        .environmentObject(engine)
+                        .environmentObject(settings)
+                }
+
+                Spacer(minLength: 0)
+
                 if settings.glassMode {
                     GlassPanel(editing: $drawingGlassRegion)
                         .environmentObject(engine)
                         .environmentObject(settings)
                 }
-                ActiveLayerStrip()
+
+                LayerDock { group in
+                    panelFocus = group
+                    showLayers = true
+                }
+
                 controls
             }
-            .padding()
+            .padding(.horizontal, Style.inset)
+            .padding(.vertical, 8)
 
             if remote.stealth {
                 // Blacks out this device only. Detection, alerts and the peer
@@ -135,7 +159,7 @@ struct ContentView: View {
         .fullScreenCover(isPresented: $showWall) { VideoWallView() }
         .sheet(isPresented: $showClips) { ClipLibraryView().environmentObject(engine) }
         .sheet(isPresented: $showLayers) {
-            LayerPanelView().environmentObject(engine)
+            LayerPanelView(focus: panelFocus).environmentObject(engine)
         }
         .fullScreenCover(isPresented: $showWelcome) { WelcomeView() }
         .onChange(of: router.openRecordings) { _, open in
@@ -151,153 +175,40 @@ struct ContentView: View {
         withAnimation(.easeInOut(duration: 0.25)) { RemoteControl.shared.stealth = false }
     }
 
-    private var telemetry: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(engine.isArmed ? Color.red : (engine.isRunning ? Color.yellow : Color.gray))
-                    .frame(width: 10, height: 10)
-                Text(engine.isRunning
-                     ? (engine.isArmed ? engine.status : "Arming in \(engine.armCountdown)s")
-                     : "Ready")
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                Spacer(minLength: 6)
-                if engine.depthAvailable {
-                    Image(systemName: "sensor.tag.radiowaves.forward").font(.caption2)
-                }
-                if !peers.peers.isEmpty {
-                    Label("\(peers.peers.count)", systemImage: "link")
-                        .font(.caption2)
-                }
-            }
-
-            // Two short rows rather than one long one: six fields on a single
-            // line wrapped and overlapped on a phone.
-            HStack(spacing: 12) {
-                stat("motion", String(format: "%.3f", engine.motionScore))
-                stat("shadow", String(format: "%.0f%%", engine.shadowRejectFraction * 100))
-                stat("rate", String(format: "%.0fHz", engine.visionHz))
-                Spacer(minLength: 0)
-            }
-            HStack(spacing: 12) {
-                stat("sound", String(format: "%.0fdB", engine.soundLevelDB))
-                stat("range", engine.rangeSourceLabel)
-                stat("zoom", String(format: "%.1fx", engine.zoom))
-                stat("cam", engine.usingFrontCamera ? "front" : "back")
-                stat("power", power.summary)
-                Spacer(minLength: 0)
-            }
-        }
-        .padding(10)
-        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
-        .foregroundStyle(.white)
-    }
-
-    private func stat(_ label: String, _ value: String) -> some View {
-        HStack(spacing: 3) {
-            Text(label).foregroundStyle(.white.opacity(0.45))
-            Text(value).foregroundStyle(.white.opacity(0.9))
-        }
-        .font(.system(size: 11, weight: .medium, design: .monospaced))
-        .lineLimit(1)
-        .fixedSize()
-    }
-
     private var controls: some View {
-        HStack(spacing: 10) {
-            Button {
-                engine.isRunning ? engine.stop() : engine.start()
-            } label: {
-                Label(engine.isRunning ? "Stop" : "Arm",
-                      systemImage: engine.isRunning ? "stop.fill" : "shield.lefthalf.filled")
-                    .font(.headline)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-            }
-            .background(engine.isRunning ? Color.red : Color.green, in: Capsule())
-            .foregroundStyle(.white)
+        HStack(spacing: Style.gap) {
+            ArmButton().environmentObject(engine)
 
-            circleButton(engine.usingFrontCamera
-                         ? "arrow.triangle.2.circlepath.camera.fill"
-                         : "arrow.triangle.2.circlepath.camera") {
-                engine.flipCamera()
-                pinchStart = 1
-            }
-            circleButton("rectangle.on.rectangle") { showWall = true }
-            circleButton("moon.fill") { enterStealth() }
+            SentryToolButton(icon: "film", label: "Recordings",
+                             badge: engine.clipURLs.count) { showClips = true }
+
+            SentryToolButton(icon: "list.bullet.rectangle", label: "Detections",
+                             badge: engine.events.count) { showLog = true }
 
             Menu {
-                Button { engine.relearnBackground() } label: {
-                    Label("Relearn background", systemImage: "arrow.clockwise")
-                }
-                Button { showLog = true } label: {
-                    Label("Detections (\(engine.events.count))", systemImage: "list.bullet.rectangle")
-                }
-                Button { showClips = true } label: {
-                    Label("Recordings (\(engine.clipURLs.count))", systemImage: "film")
-                }
-                Button {
-                    engine.setGlassMode(!settings.glassMode)
-                    drawingGlassRegion = false
-                } label: {
-                    Label(settings.glassMode ? "Exit tinted-glass mode" : "Look through tinted glass",
-                          systemImage: settings.glassMode ? "car.fill" : "car")
-                }
-                Menu {
-                    Button { drawMode = .zone } label: {
-                        Label("Zone to watch", systemImage: "rectangle.dashed")
-                    }
-                    Button { drawMode = .line } label: {
-                        Label("Counting line", systemImage: "line.diagonal")
-                    }
-                    Button { drawMode = .redaction } label: {
-                        Label("Area to never record", systemImage: "eye.slash")
-                    }
-                } label: {
-                    Label("Draw on the feed", systemImage: "pencil.and.outline")
-                }
-                Button { showLayers = true } label: {
-                    Label(layers.activeIDs.isEmpty ? "AI layers"
-                                                   : "AI layers (\(layers.activeIDs.count) on)",
-                          systemImage: "square.stack.3d.up")
-                }
                 Button { showMesh = true } label: {
                     Label("Devices", systemImage: "square.grid.2x2")
                 }
                 Button { showSettings = true } label: {
                     Label("Settings", systemImage: "slider.horizontal.3")
                 }
+                Button { engine.relearnBackground() } label: {
+                    Label("Relearn background", systemImage: "arrow.clockwise")
+                }
+                Button { showWelcome = true } label: {
+                    Label("How this works", systemImage: "questionmark.circle")
+                }
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.title3)
-                    .frame(width: 46, height: 46)
-                    .background(.ultraThinMaterial, in: Circle())
-                    .overlay(alignment: .topTrailing) {
-                        if !engine.events.isEmpty {
-                            Text("\(engine.events.count)")
-                                .font(.caption2.bold())
-                                .padding(5)
-                                .background(Color.red, in: Circle())
-                                .foregroundStyle(.white)
-                                .offset(x: 4, y: -4)
-                        }
-                    }
+                    .font(.system(size: 18, weight: .medium))
+                    .frame(width: Style.control, height: Style.control)
+                    .foregroundStyle(.white)
+                    .sentryGlass(Circle(), interactive: true)
             }
+            .accessibilityLabel("More")
         }
-        .foregroundStyle(.white)
     }
 
-    private func circleButton(_ icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.title3)
-                .frame(width: 46, height: 46)
-                .background(.ultraThinMaterial, in: Circle())
-        }
-    }
 }
 
 struct EventLogView: View {

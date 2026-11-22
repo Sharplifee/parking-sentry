@@ -1,8 +1,15 @@
 import SwiftUI
 
-/// The toggle board. Every layer the app knows about, grouped, with its live badge,
-/// its measured cost, and — for the ones that cannot run here — the reason, stated
-/// plainly rather than hidden.
+/// The layer board.
+///
+/// Three things make forty-one layers usable rather than intimidating, and they are
+/// the whole structure of this screen: a preset row that answers "which ones do I
+/// want", an "on now" section so the current state is never in doubt, and search,
+/// because scrolling nine groups to find one layer is not discovery.
+///
+/// Everything below uses one row shape, so a layer that needs a download, a layer
+/// that needs a zone drawn, and a layer that cannot run on this device all read the
+/// same way — title, one line of plain English, state, switch.
 struct LayerPanelView: View {
     @ObservedObject var registry = LayerRegistry.shared
     @ObservedObject var geometry = LayerGeometry.shared
@@ -10,156 +17,180 @@ struct LayerPanelView: View {
     @EnvironmentObject var engine: DetectionEngine
     @Environment(\.dismiss) private var dismiss
 
+    @State private var search = ""
+    @State private var showUnavailable = false
+    /// Set by the main screen when a category button opens this panel, so it
+    /// lands on what was tapped.
+    var focus: LayerGroup?
+
+    private var matches: [AILayer] {
+        let term = search.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !term.isEmpty else { return [] }
+        return registry.all.filter {
+            $0.title.lowercased().contains(term)
+                || $0.detail.lowercased().contains(term)
+                || $0.group.rawValue.lowercased().contains(term)
+        }
+    }
+
+    private var activeLayers: [AILayer] {
+        registry.all.filter { registry.activeIDs.contains($0.id) }
+    }
+
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    HStack {
-                        Label("\(registry.activeIDs.count) on", systemImage: "square.stack.3d.up.fill")
-                            .font(.subheadline.weight(.semibold))
-                        Spacer()
-                        Text(String(format: "%.1f ms/frame", registry.activeCostMS))
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(costColor)
-                    }
-                    if let note = registry.governorNote {
-                        Text(note).font(.caption).foregroundStyle(.orange)
-                    }
-                    Text("Every layer below stays loaded and warm, so flipping one on shows output within a frame. Only the ones switched on consume frames — running two dozen models at once would throttle the phone and stutter the feed, which is the one thing an overlay must never do.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    if registry.activeIDs.count > 0 {
-                        Button("Turn everything off") { registry.deactivateAll() }
-                            .font(.caption)
-                    }
-                }
-
-                ForEach(LayerGroup.allCases) { group in
-                    let layers = registry.layers(in: group)
-                    if !layers.isEmpty {
-                        Section {
-                            ForEach(layers, id: \.id) { layer in
-                                row(layer)
-                            }
-                        } header: {
-                            HStack {
-                                Label(group.rawValue, systemImage: group.icon)
-                                Spacer()
-                                let n = registry.activeCount(in: group)
-                                if n > 0 { Text("\(n) on").foregroundStyle(.cyan) }
-                            }
+                if !search.isEmpty {
+                    Section("Matching “\(search)”") {
+                        if matches.isEmpty {
+                            Text("Nothing matches that.")
+                                .foregroundStyle(.secondary).font(.callout)
                         }
+                        ForEach(matches, id: \.id) { LayerRow(layer: $0) }
                     }
-                }
-
-                Section("Downloaded models") {
-                    Text("These capabilities have no Apple API, so they run on models downloaded once and compiled on this device. Switching the layer on starts the download; nothing is fetched until you do.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    ForEach(Array(ModelStore.manifest.keys).sorted(), id: \.self) { id in
-                        modelRow(id)
+                } else {
+                    presetSection
+                    if !activeLayers.isEmpty { onNowSection }
+                    ForEach(groupsToShow) { group in
+                        groupSection(group)
                     }
-                    if store.diskUsed > 0 {
-                        Text("Using \(ByteCountFormatter.string(fromByteCount: store.diskUsed, countStyle: .file)) on disk")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-
-                Section("Zones and lines") {
-                    if geometry.zones.isEmpty && geometry.lines.isEmpty {
-                        Text("Zones, dwell timers and crossing counts need a shape to work with. Close this and use Draw on the main screen.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    ForEach(geometry.zones) { zone in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(zone.name).font(.subheadline)
-                                Spacer()
-                                Button(role: .destructive) {
-                                    geometry.removeZone(zone.id)
-                                    geometry.refreshCaches()
-                                } label: { Image(systemName: "trash") }
-                                .buttonStyle(.borderless)
-                            }
-                            Stepper("Alert at \(zone.alertAtCount == 0 ? "off" : "\(zone.alertAtCount) inside")",
-                                    value: binding(for: zone.id, \.alertAtCount), in: 0...20)
-                                .font(.caption)
-                            Stepper("Loitering alert \(zone.alertAfterSeconds == 0 ? "off" : "\(Int(zone.alertAfterSeconds))s")",
-                                    value: binding(for: zone.id, \.alertAfterSeconds), in: 0...600, step: 15)
-                                .font(.caption)
-                        }
-                    }
-                    ForEach(geometry.lines) { line in
-                        HStack {
-                            Text(line.name).font(.subheadline)
-                            Spacer()
-                            Button(role: .destructive) {
-                                geometry.removeLine(line.id)
-                                geometry.refreshCaches()
-                            } label: { Image(systemName: "trash") }
-                            .buttonStyle(.borderless)
-                        }
-                    }
-                }
-
-                if !registry.feed.isEmpty {
-                    Section("Layer output") {
-                        ForEach(registry.feed.prefix(40)) { line in
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(line.text).font(.caption)
-                                Text(registry.layer(line.layer)?.title ?? line.layer)
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
+                    modelSection
+                    geometrySection
+                    if !registry.feed.isEmpty { outputSection }
                 }
             }
-            .navigationTitle("AI layers")
+            .listStyle(.insetGrouped)
+            .searchable(text: $search, prompt: "Search layers")
+            .navigationTitle("Layers")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if !activeLayers.isEmpty {
+                        Button("All off") { registry.deactivateAll() }
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
             }
         }
     }
 
-    @ViewBuilder
-    private func modelRow(_ id: String) -> some View {
-        let remote = ModelStore.manifest[id]
-        VStack(alignment: .leading, spacing: 3) {
-            HStack {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(remote?.title ?? id).font(.subheadline)
-                    Text("\((remote?.totalBytes ?? 0) / 1_000_000) MB · \(remote?.license ?? "")")
+    private var groupsToShow: [LayerGroup] {
+        guard let focus else { return LayerGroup.allCases }
+        // Focused group first, the rest still reachable below it.
+        return [focus] + LayerGroup.allCases.filter { $0 != focus }
+    }
+
+    // MARK: Presets
+
+    private var presetSection: some View {
+        Section {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(LayerPreset.all) { preset in
+                        presetCard(preset)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+        } header: {
+            Text("Start here")
+        } footer: {
+            Text("A preset switches on the handful of layers that do one job, and switches the rest off. You can adjust anything afterwards.")
+        }
+    }
+
+    private func presetCard(_ preset: LayerPreset) -> some View {
+        let isCurrent = LayerPreset.matching(registry.activeIDs)?.id == preset.id
+        let mb = preset.downloadMB
+        return Button {
+            preset.apply()
+        } label: {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Image(systemName: preset.icon).font(.headline)
+                    if isCurrent {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.caption).foregroundStyle(.green)
+                    }
+                }
+                Text(preset.name)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text(preset.detail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+                if mb > 0 {
+                    Label("\(mb) MB", systemImage: "arrow.down.circle")
+                        .font(.caption2).foregroundStyle(.cyan)
+                } else {
+                    Label("\(preset.layers.count) layers", systemImage: "square.stack.3d.up")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
+            }
+            .padding(11)
+            .frame(width: 164, height: 134, alignment: .topLeading)
+            .background(isCurrent ? Color.accentColor.opacity(0.14) : Color.secondary.opacity(0.09),
+                        in: RoundedRectangle(cornerRadius: 14))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(isCurrent ? Color.accentColor.opacity(0.5) : .clear, lineWidth: 1.5))
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: On now
+
+    private var onNowSection: some View {
+        Section {
+            ForEach(activeLayers, id: \.id) { LayerRow(layer: $0) }
+        } header: {
+            HStack {
+                Text("On now")
                 Spacer()
-                switch store.state(id) {
-                case .ready:
-                    HStack(spacing: 8) {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                        Button(role: .destructive) { store.remove(id) } label: {
-                            Image(systemName: "trash")
-                        }
-                        .buttonStyle(.borderless)
+                Text(String(format: "%.1f ms/frame", registry.activeCostMS))
+                    .font(.caption.monospaced())
+                    .foregroundStyle(costColor)
+            }
+        } footer: {
+            if let note = registry.governorNote {
+                Text(note).foregroundStyle(.orange)
+            } else {
+                Text("Every layer stays loaded, so switching one on shows output within a frame. Only the ones on here use any power.")
+            }
+        }
+    }
+
+    // MARK: Groups
+
+    @ViewBuilder
+    private func groupSection(_ group: LayerGroup) -> some View {
+        let all = registry.layers(in: group)
+        let usable = all.filter { $0.availability.isUsable }
+        let blocked = all.filter { !$0.availability.isUsable }
+        if !all.isEmpty {
+            Section {
+                ForEach(usable, id: \.id) { LayerRow(layer: $0) }
+                if !blocked.isEmpty {
+                    DisclosureGroup("Not available on this device (\(blocked.count))") {
+                        ForEach(blocked, id: \.id) { LayerRow(layer: $0) }
                     }
-                case .absent:
-                    Button("Download") { store.fetch(id) }
-                        .font(.caption).buttonStyle(.bordered)
-                case .downloading(let f):
-                    Text(String(format: "%.0f%%", f * 100))
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.cyan)
-                case .compiling:
-                    Text("compiling").font(.caption).foregroundStyle(.cyan)
-                case .failed:
-                    Button("Retry") { store.fetch(id) }
-                        .font(.caption).buttonStyle(.bordered).tint(.orange)
+                    .font(.caption)
                 }
-            }
-            if case .downloading(let f) = store.state(id) {
-                ProgressView(value: f).tint(.cyan)
-            }
-            if case .failed(let why) = store.state(id) {
-                Text(why).font(.caption2).foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
+            } header: {
+                HStack {
+                    Label(group.rawValue, systemImage: group.icon)
+                    Spacer()
+                    let n = registry.activeCount(in: group)
+                    if n > 0 {
+                        Text("\(n) on")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tint)
+                    }
+                }
             }
         }
     }
@@ -170,6 +201,96 @@ struct LayerPanelView: View {
         if registry.activeCostMS > budget { return .orange }
         if registry.activeCostMS > budget * 0.6 { return .yellow }
         return .secondary
+    }
+
+    // MARK: Models
+
+    private var modelSection: some View {
+        Section {
+            ForEach(Array(ModelStore.manifest.keys).sorted(), id: \.self) { id in
+                ModelRow(id: id)
+            }
+            if store.diskUsed > 0 {
+                HStack {
+                    Text("On this device").font(.caption)
+                    Spacer()
+                    Text(ByteCountFormatter.string(fromByteCount: store.diskUsed, countStyle: .file))
+                        .font(.caption.monospaced()).foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Label("Downloaded models", systemImage: "arrow.down.circle")
+        } footer: {
+            Text("A few capabilities have no Apple equivalent and run on a model downloaded once and compiled here. Nothing is fetched until you switch the layer on, and you can delete any of them.")
+        }
+    }
+
+    // MARK: Zones
+
+    private var geometrySection: some View {
+        Section {
+            if geometry.zones.isEmpty && geometry.lines.isEmpty {
+                Label("Nothing drawn yet", systemImage: "rectangle.dashed")
+                    .foregroundStyle(.secondary).font(.callout)
+                Text("Close this and use Draw on the camera screen to add a zone to watch, a line to count crossings, or an area to never record.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(geometry.zones) { zone in
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Label(zone.name, systemImage: "rectangle.dashed")
+                            .font(.subheadline)
+                        Spacer()
+                        Button(role: .destructive) {
+                            geometry.removeZone(zone.id)
+                            geometry.refreshCaches()
+                        } label: { Image(systemName: "trash") }
+                        .buttonStyle(.borderless)
+                    }
+                    Stepper(zone.alertAtCount == 0
+                            ? "Alert when crowded: off"
+                            : "Alert at \(zone.alertAtCount) inside",
+                            value: binding(for: zone.id, \.alertAtCount), in: 0...20)
+                        .font(.caption)
+                    Stepper(zone.alertAfterSeconds == 0
+                            ? "Alert on loitering: off"
+                            : "Alert after \(Int(zone.alertAfterSeconds))s",
+                            value: binding(for: zone.id, \.alertAfterSeconds),
+                            in: 0...600, step: 15)
+                        .font(.caption)
+                }
+            }
+            ForEach(geometry.lines) { line in
+                HStack {
+                    Label(line.name, systemImage: "line.diagonal")
+                        .font(.subheadline)
+                    Spacer()
+                    Button(role: .destructive) {
+                        geometry.removeLine(line.id)
+                        geometry.refreshCaches()
+                    } label: { Image(systemName: "trash") }
+                    .buttonStyle(.borderless)
+                }
+            }
+        } header: {
+            Label("Zones and lines", systemImage: "scope")
+        }
+    }
+
+    // MARK: Output
+
+    private var outputSection: some View {
+        Section {
+            ForEach(registry.feed.prefix(30)) { line in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(line.text).font(.callout)
+                    Text(registry.layer(line.layer)?.title ?? line.layer)
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Label("What the layers are saying", systemImage: "text.bubble")
+        }
     }
 
     private func binding<V>(for id: UUID,
@@ -187,93 +308,131 @@ struct LayerPanelView: View {
                 geometry.refreshCaches()
             })
     }
+}
 
-    @ViewBuilder
-    private func row(_ layer: AILayer) -> some View {
-        let on = registry.isActive(layer.id)
+// MARK: - One row shape for every layer
+
+/// Every layer reads the same way whatever its state: name, a line of plain
+/// English, what it is currently reporting, and a switch. The state line is the
+/// part that matters — a switch that does nothing because a model is missing or a
+/// zone has not been drawn is the single most confusing thing this screen could do,
+/// so the reason always sits right under the name.
+private struct LayerRow: View {
+    let layer: AILayer
+    @ObservedObject private var registry = LayerRegistry.shared
+
+    var body: some View {
+        let on = registry.activeIDs.contains(layer.id)
         let output = registry.outputs[layer.id]
         let usable = layer.availability.isUsable
 
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(layer.title)
-                            .font(.subheadline.weight(on ? .semibold : .regular))
-                            .foregroundStyle(usable ? .primary : .secondary)
-                        if let badge = output?.badge {
-                            Text(badge)
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .padding(.horizontal, 5).padding(.vertical, 1)
-                                .background(.cyan.opacity(0.22), in: Capsule())
-                        }
-                        if let stretched = registry.throttled[layer.id] {
-                            Text("1/\(stretched)")
-                                .font(.system(size: 9, design: .monospaced))
-                                .foregroundStyle(.orange)
-                        }
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(layer.title)
+                        .font(.body)
+                        .foregroundStyle(usable ? .primary : .secondary)
+                    if let badge = output?.badge, on {
+                        Text(badge)
+                            .font(.caption2.weight(.semibold).monospaced())
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(.tint.opacity(0.18), in: Capsule())
+                            .lineLimit(1)
                     }
-                    Text(layer.detail)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if let reason = layer.availability.reason {
-                        Text(reason)
-                            .font(.caption2)
-                            .foregroundStyle(usable ? .orange : .red.opacity(0.85))
-                            .fixedSize(horizontal: false, vertical: true)
+                    if let slower = registry.throttled[layer.id], on {
+                        Label("1/\(slower)", systemImage: "tortoise")
+                            .font(.caption2).foregroundStyle(.orange)
                     }
                 }
-                Spacer(minLength: 4)
-                VStack(alignment: .trailing, spacing: 2) {
-                    Toggle("", isOn: Binding(
-                        get: { on },
-                        set: { registry.setActive(layer.id, $0) }))
-                        .labelsHidden()
-                        .disabled(!usable)
-                    if on, let ms = registry.cost[layer.id], ms > 0.05 {
-                        Text(String(format: "%.1f ms", ms))
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
+
+                Text(layer.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let reason = layer.availability.reason {
+                    Label(reason, systemImage: statusIcon)
+                        .font(.caption2)
+                        .foregroundStyle(usable ? .orange : .secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if on, let ms = registry.cost[layer.id], ms > 0.05 {
+                    Text(String(format: "%.1f ms per run", ms))
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
                 }
             }
+
+            Spacer(minLength: 0)
+
+            Toggle("", isOn: Binding(
+                get: { on },
+                set: { registry.setActive(layer.id, $0) }))
+                .labelsHidden()
+                .disabled(!usable)
         }
-        .padding(.vertical, 1)
+        .padding(.vertical, 2)
+    }
+
+    private var statusIcon: String {
+        switch layer.availability {
+        case .needsDownload:  return "arrow.down.circle"
+        case .needsSetup:     return "pencil.and.outline"
+        case .needsNetwork:   return "wifi"
+        case .needsHardware:  return "exclamationmark.triangle"
+        case .modelMissing:   return "exclamationmark.triangle"
+        case .noPublicAPI:    return "info.circle"
+        case .available:      return "checkmark"
+        }
     }
 }
 
-/// The quick-access strip on the camera screen: the layers that are on, tappable to
-/// turn off, so the common case never needs the full panel.
-struct ActiveLayerStrip: View {
-    @ObservedObject var registry = LayerRegistry.shared
+// MARK: - Model row
+
+private struct ModelRow: View {
+    let id: String
+    @ObservedObject private var store = ModelStore.shared
 
     var body: some View {
-        if !registry.activeIDs.isEmpty {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(registry.all.filter { registry.activeIDs.contains($0.id) }, id: \.id) { layer in
-                        Button {
-                            registry.setActive(layer.id, false)
-                        } label: {
-                            HStack(spacing: 4) {
-                                Text(layer.title).font(.system(size: 11, weight: .semibold))
-                                if let b = registry.outputs[layer.id]?.badge {
-                                    Text(b).font(.system(size: 10, design: .monospaced))
-                                        .foregroundStyle(.cyan)
-                                }
-                                Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.horizontal, 8).padding(.vertical, 5)
-                            .background(.black.opacity(0.55), in: Capsule())
-                            .overlay(Capsule().stroke(.white.opacity(0.14), lineWidth: 1))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.white)
-                    }
+        let remote = ModelStore.manifest[id]
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(remote?.title ?? id).font(.body)
+                    Text("\((remote?.totalBytes ?? 0) / 1_000_000) MB · \(remote?.license ?? "")")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 1)
+                Spacer()
+                switch store.state(id) {
+                case .ready:
+                    HStack(spacing: 10) {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                        Button(role: .destructive) { store.remove(id) } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                case .absent:
+                    Button("Get") { store.fetch(id) }
+                        .buttonStyle(.bordered).font(.caption)
+                case .downloading:
+                    ProgressView().controlSize(.small)
+                case .compiling:
+                    Text("compiling").font(.caption).foregroundStyle(.tint)
+                case .failed:
+                    Button("Retry") { store.fetch(id) }
+                        .buttonStyle(.bordered).font(.caption).tint(.orange)
+                }
+            }
+            if case .downloading(let fraction) = store.state(id) {
+                ProgressView(value: fraction)
+                Text(String(format: "%.0f%%", fraction * 100))
+                    .font(.caption2.monospaced()).foregroundStyle(.secondary)
+            }
+            if case .failed(let why) = store.state(id) {
+                Text(why).font(.caption2).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
