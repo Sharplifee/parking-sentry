@@ -379,10 +379,16 @@ final class SpeakerDiarizationLayer: ModelBackedLayer, AudioAILayer {
             guard let result = out.featureValue(for: "embedding")?.multiArrayValue
             else { return nil }
 
+            // Dtype checked before reinterpreting the backing store: a float16
+            // output read as float32 does not fail, it returns plausible nonsense.
             var vector = [Float](repeating: 0, count: result.count)
-            result.withUnsafeBytes { raw in
-                guard let base = raw.baseAddress?.assumingMemoryBound(to: Float.self) else { return }
-                for i in 0..<result.count { vector[i] = base[i] }
+            if result.dataType == .float32 {
+                result.withUnsafeBytes { raw in
+                    guard let base = raw.baseAddress?.assumingMemoryBound(to: Float.self) else { return }
+                    for i in 0..<result.count { vector[i] = base[i] }
+                }
+            } else {
+                for i in 0..<result.count { vector[i] = result[i].floatValue }
             }
             var norm: Float = 0
             for v in vector { norm += v * v }

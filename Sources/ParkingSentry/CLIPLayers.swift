@@ -129,9 +129,19 @@ final class CLIPEngine {
         let count = array.count
         guard count > 0 else { return nil }
         var vector = [Float](repeating: 0, count: count)
-        array.withUnsafeBytes { raw in
-            guard let base = raw.baseAddress?.assumingMemoryBound(to: Float.self) else { return }
-            for i in 0..<count { vector[i] = base[i] }
+        // The fast path reinterprets the backing store as Float32, which is only
+        // valid if that is what it holds. A model converted at float16 precision
+        // can declare a float16 output, and reading those bytes as Float32 does
+        // not fail — it returns plausible-looking nonsense, which here means a
+        // confident embedding for something nobody asked about. So the dtype is
+        // checked, with a slower but always-correct path behind it.
+        if array.dataType == .float32 {
+            array.withUnsafeBytes { raw in
+                guard let base = raw.baseAddress?.assumingMemoryBound(to: Float.self) else { return }
+                for i in 0..<count { vector[i] = base[i] }
+            }
+        } else {
+            for i in 0..<count { vector[i] = array[i].floatValue }
         }
         var norm: Float = 0
         for v in vector { norm += v * v }

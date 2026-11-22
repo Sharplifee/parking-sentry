@@ -338,10 +338,16 @@ final class FaceIdentityLayer: ModelBackedLayer, VideoAILayer {
                 dictionary: ["face": MLFeatureValue(pixelBuffer: buffer)])
             let out = try model.prediction(from: provider)
             guard let array = out.featureValue(for: "embedding")?.multiArrayValue else { return nil }
+            // Dtype checked before reinterpreting the backing store: a float16
+            // output read as float32 does not fail, it returns plausible nonsense.
             var vector = [Float](repeating: 0, count: array.count)
-            array.withUnsafeBytes { raw in
-                guard let base = raw.baseAddress?.assumingMemoryBound(to: Float.self) else { return }
-                for i in 0..<array.count { vector[i] = base[i] }
+            if array.dataType == .float32 {
+                array.withUnsafeBytes { raw in
+                    guard let base = raw.baseAddress?.assumingMemoryBound(to: Float.self) else { return }
+                    for i in 0..<array.count { vector[i] = base[i] }
+                }
+            } else {
+                for i in 0..<array.count { vector[i] = array[i].floatValue }
             }
             var norm: Float = 0
             for v in vector { norm += v * v }
@@ -454,10 +460,16 @@ final class FaceAttributesLayer: ModelBackedLayer, VideoAILayer {
             guard let array = out.featureValue(for: "emotion_logits")?.multiArrayValue,
                   array.count >= 8 else { return nil }
 
+            // Dtype checked before reinterpreting the backing store: a float16
+            // output read as float32 does not fail, it returns plausible nonsense.
             var logits = [Float](repeating: 0, count: 8)
-            array.withUnsafeBytes { raw in
-                guard let base = raw.baseAddress?.assumingMemoryBound(to: Float.self) else { return }
-                for i in 0..<8 { logits[i] = base[i] }
+            if array.dataType == .float32 {
+                array.withUnsafeBytes { raw in
+                    guard let base = raw.baseAddress?.assumingMemoryBound(to: Float.self) else { return }
+                    for i in 0..<8 { logits[i] = base[i] }
+                }
+            } else {
+                for i in 0..<8 { logits[i] = array[i].floatValue }
             }
             // The model emits logits, so a softmax is needed before any of these
             // numbers can be read as a confidence.
@@ -639,10 +651,19 @@ final class AgeGenderLayer: VideoAILayer {
                   array.count >= count else { return nil }
             // Both graphs end in a Softmax, so these are already probabilities and
             // applying another one here would flatten them towards uniform.
+            //
+            // Dtype checked before reinterpreting the store: these were converted
+            // at float16 precision, and although the declared output is float32,
+            // reading float16 bytes as float32 would not fail — it would return
+            // plausible numbers that happen to be wrong.
             var values = [Float](repeating: 0, count: count)
-            array.withUnsafeBytes { raw in
-                guard let base = raw.baseAddress?.assumingMemoryBound(to: Float.self) else { return }
-                for i in 0..<count { values[i] = base[i] }
+            if array.dataType == .float32 {
+                array.withUnsafeBytes { raw in
+                    guard let base = raw.baseAddress?.assumingMemoryBound(to: Float.self) else { return }
+                    for i in 0..<count { values[i] = base[i] }
+                }
+            } else {
+                for i in 0..<count { values[i] = array[i].floatValue }
             }
             return values
         } catch {
