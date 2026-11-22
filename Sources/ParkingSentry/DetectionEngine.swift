@@ -735,7 +735,7 @@ final class DetectionEngine: NSObject, ObservableObject {
                                        orientation: .up,
                                        roi: (dueToMotion && !dueToSound) ? motion.region : nil,
                                        minConfidence: Float(settings.personConfidence),
-                                       wantUnknownObjects: settings.alertCategories.contains(.unknown))
+                                       wantUnknownObjects: settings.live.alertCategories.contains(.unknown))
 
         visionTimestamps.append(now)
         visionTimestamps.removeAll { now.timeIntervalSince($0) > 2 }
@@ -910,7 +910,12 @@ final class DetectionEngine: NSObject, ObservableObject {
 
     private func handleGlass(pixelBuffer: CVPixelBuffer) {
         glass.gain = settings.glassGain
-        glass.region = settings.glassRegion
+        // From the snapshot: a CGRect is four Doubles, so reading it while the
+        // main thread assigns a newly drawn one can yield a mix of the two. The
+        // analyzer's `region` setter resets its learned baseline on any change,
+        // so a torn read throws away the baseline and restarts the measurement
+        // for no reason the operator could see.
+        glass.region = settings.live.glassRegion
         guard let r = glass.analyze(pixelBuffer: pixelBuffer) else { return }
 
         // The mic is a second, independent answer to the same question: people
@@ -1069,7 +1074,7 @@ final class DetectionEngine: NSObject, ObservableObject {
 
     private func evaluateAlert(track: Track, pixelBuffer: CVPixelBuffer) {
         guard track.hits >= settings.confirmHits else { return }
-        guard settings.alertCategories.contains(track.category) else { return }
+        guard settings.live.alertCategories.contains(track.category) else { return }
 
         // People get an extra check: a real person usually yields several confident pose
         // joints, and requiring a couple on top of the rectangle removes texture false hits.

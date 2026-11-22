@@ -192,7 +192,7 @@ final class QuestionAnsweringLayer: VideoAILayer {
     var availability: LayerAvailability {
         let llm = OnDeviceLLM.shared.status
         guard llm.isUsable else { return llm }
-        if Settings.shared.llmQuestion.trimmingCharacters(in: .whitespaces).isEmpty {
+        if Settings.shared.live.llmQuestion.trimmingCharacters(in: .whitespaces).isEmpty {
             return .needsSetup("Type a question in Settings")
         }
         return TextBus.shared.isEmpty
@@ -213,7 +213,7 @@ final class QuestionAnsweringLayer: VideoAILayer {
             return out
         }
 
-        let question = Settings.shared.llmQuestion.trimmingCharacters(in: .whitespaces)
+        let question = Settings.shared.live.llmQuestion.trimmingCharacters(in: .whitespaces)
         guard !question.isEmpty else { return nil }
         let entries = TextBus.shared.recent(seconds: 1800)
         guard !entries.isEmpty else { return nil }
@@ -259,7 +259,7 @@ final class OnDeviceTranslationLayer: VideoAILayer {
     let modality = LayerModality.text
     var availability: LayerAvailability {
         if #available(iOS 26.0, *) {
-            guard !Settings.shared.translationTarget.isEmpty else {
+            guard !Settings.shared.live.translationTarget.isEmpty else {
                 return .needsSetup("Pick a language in Settings")
             }
             switch TranslationBridge.shared.lastStatus {
@@ -329,7 +329,7 @@ final class TranslationBridge {
 
     private init() {}
 
-    private var targetLanguage: String { Settings.shared.translationTarget }
+    private var targetLanguage: String { Settings.shared.live.translationTarget }
 
     func refreshStatus() {
         guard #available(iOS 18.0, *) else { lastStatus = .unsupported; return }

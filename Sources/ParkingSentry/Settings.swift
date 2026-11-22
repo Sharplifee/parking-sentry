@@ -40,7 +40,7 @@ final class Settings: ObservableObject {
     @Published var subjectHeightMeters: Double { didSet { d.set(subjectHeightMeters, forKey: "subjectHeightMeters") } }
     /// Which kinds of subject are allowed to raise an alert.
     @Published var alertCategories: Set<SubjectCategory> {
-        didSet { d.set(alertCategories.map(\.rawValue), forKey: "alertCategories") }
+        didSet { d.set(alertCategories.map(\.rawValue), forKey: "alertCategories"); refreshLive() }
     }
     /// Let a sharp sound wake the detector even when the picture has not changed.
     @Published var soundTrigger: Bool { didSet { d.set(soundTrigger, forKey: "soundTrigger") } }
@@ -51,7 +51,7 @@ final class Settings: ObservableObject {
     @Published var sirenEnabled: Bool { didSet { d.set(sirenEnabled, forKey: "sirenEnabled") } }
     @Published var notificationsEnabled: Bool { didSet { d.set(notificationsEnabled, forKey: "notificationsEnabled") } }
     /// e.g. https://ntfy.sh/your-private-topic  — POSTed so a phone in your pocket buzzes.
-    @Published var webhookURL: String { didSet { d.set(webhookURL, forKey: "webhookURL") } }
+    @Published var webhookURL: String { didSet { d.set(webhookURL, forKey: "webhookURL"); refreshLive() } }
     @Published var cooldownSeconds: Double { didSet { d.set(cooldownSeconds, forKey: "cooldownSeconds") } }
     // MARK: Recording
     /// Save a clip on every confirmed detection.
@@ -66,29 +66,29 @@ final class Settings: ObservableObject {
 
     // MARK: Layers
     /// Comma-separated words the keyword layer watches for.
-    @Published var watchKeywords: String { didSet { d.set(watchKeywords, forKey: "watchKeywords") } }
+    @Published var watchKeywords: String { didSet { d.set(watchKeywords, forKey: "watchKeywords"); refreshLive() } }
     /// What the open-vocabulary layer looks for, in plain words.
-    @Published var groundingQuery: String { didSet { d.set(groundingQuery, forKey: "groundingQuery") } }
+    @Published var groundingQuery: String { didSet { d.set(groundingQuery, forKey: "groundingQuery"); refreshLive() } }
     /// Seconds between model calls for the layers that use one. Each call costs
     /// money and bandwidth, so this is deliberately slow by default.
     @Published var modelCallInterval: Double { didSet { d.set(modelCallInterval, forKey: "modelCallInterval") } }
 
     // MARK: On-device model layers
     /// The question the answering layer asks about what the camera has seen.
-    @Published var llmQuestion: String { didSet { d.set(llmQuestion, forKey: "llmQuestion") } }
+    @Published var llmQuestion: String { didSet { d.set(llmQuestion, forKey: "llmQuestion"); refreshLive() } }
     /// Comma-separated categories for zero-shot text classification.
-    @Published var textCategories: String { didSet { d.set(textCategories, forKey: "textCategories") } }
+    @Published var textCategories: String { didSet { d.set(textCategories, forKey: "textCategories"); refreshLive() } }
     /// Phrase used to search back through indexed moments.
-    @Published var retrievalQuery: String { didSet { d.set(retrievalQuery, forKey: "retrievalQuery") } }
+    @Published var retrievalQuery: String { didSet { d.set(retrievalQuery, forKey: "retrievalQuery"); refreshLive() } }
     /// Target language code for on-device translation, empty for off.
     @Published var translationTarget: String {
-        didSet { d.set(translationTarget, forKey: "translationTarget") }
+        didSet { d.set(translationTarget, forKey: "translationTarget"); refreshLive() }
     }
 
     // MARK: Privacy layers
     /// "faces", "people" or "both" — what the blur layer covers.
     @Published var privacyBlurTarget: String {
-        didSet { d.set(privacyBlurTarget, forKey: "privacyBlurTarget") }
+        didSet { d.set(privacyBlurTarget, forKey: "privacyBlurTarget"); refreshLive() }
     }
     /// Carry the redaction into recordings and the peer stream, not just the
     /// preview, so a blurred face never leaves the device.
@@ -99,6 +99,7 @@ final class Settings: ObservableObject {
             if let data = try? JSONEncoder().encode(redactionRegions) {
                 d.set(data, forKey: "redactionRegions")
             }
+            refreshLive()
         }
     }
 
@@ -117,6 +118,7 @@ final class Settings: ObservableObject {
             d.set(glassRegion.minY, forKey: "glassRegionY")
             d.set(glassRegion.width, forKey: "glassRegionW")
             d.set(glassRegion.height, forKey: "glassRegionH")
+            refreshLive()
         }
     }
     /// Sustained-activity fraction that counts as occupied.
@@ -129,6 +131,57 @@ final class Settings: ObservableObject {
     /// Feet and miles per hour by default; metric is opt-in.
     @Published var useMetric: Bool {
         didSet { d.set(useMetric, forKey: "useMetric"); Units.useMetric = useMetric }
+    }
+
+    // MARK: Capture-queue snapshot
+    //
+    // The capture queue reads settings on every frame while the UI writes them on
+    // the main thread. For a Bool or a Double that is at worst a stale read, but
+    // the keyword list, the search phrase, the question, the blur target, the
+    // redaction rects and the alert-category set are all refcounted storage, and
+    // reading one of those while SwiftUI reassigns it is a crash waiting for the
+    // user to type into a text field at the wrong moment. Over twenty call sites
+    // in the layers and the engine were doing exactly that.
+    //
+    // So the capture path reads this instead: one lock-protected struct of plain
+    // values, refreshed whenever any of them changes.
+
+    struct Live {
+        var watchKeywords = ""
+        var groundingQuery = ""
+        var llmQuestion = ""
+        var textCategories = ""
+        var retrievalQuery = ""
+        var translationTarget = ""
+        var privacyBlurTarget = "faces"
+        var webhookURL = ""
+        var redactionRegions: [CGRect] = []
+        var alertCategories: Set<SubjectCategory> = []
+        var glassRegion = CGRect(x: 0.22, y: 0.30, width: 0.56, height: 0.40)
+    }
+
+    private var liveStore = Live()
+    private let liveLock = NSLock()
+
+    /// Safe to read from any thread.
+    var live: Live {
+        liveLock.lock(); defer { liveLock.unlock() }
+        return liveStore
+    }
+
+    private func refreshLive() {
+        let next = Live(watchKeywords: watchKeywords,
+                        groundingQuery: groundingQuery,
+                        llmQuestion: llmQuestion,
+                        textCategories: textCategories,
+                        retrievalQuery: retrievalQuery,
+                        translationTarget: translationTarget,
+                        privacyBlurTarget: privacyBlurTarget,
+                        webhookURL: webhookURL,
+                        redactionRegions: redactionRegions,
+                        alertCategories: alertCategories,
+                        glassRegion: glassRegion)
+        liveLock.lock(); liveStore = next; liveLock.unlock()
     }
 
     private init() {
@@ -178,5 +231,7 @@ final class Settings: ObservableObject {
                              y: dbl("glassRegionY", 0.30),
                              width: dbl("glassRegionW", 0.56),
                              height: dbl("glassRegionH", 0.40))
+        // didSet does not fire for assignments in init.
+        refreshLive()
     }
 }

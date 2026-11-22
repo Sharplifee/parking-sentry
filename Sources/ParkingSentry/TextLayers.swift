@@ -177,7 +177,7 @@ final class KeywordLayer: TextDrivenLayer {
     override var title: String { "Keywords & intent" }
     override var detail: String { "Watches for words you choose and raises an alert on a hit." }
     override var availability: LayerAvailability {
-        if Settings.shared.watchKeywords.trimmingCharacters(in: .whitespaces).isEmpty {
+        if Settings.shared.live.watchKeywords.trimmingCharacters(in: .whitespaces).isEmpty {
             return .needsSetup("Add words to watch for in Settings")
         }
         return TextBus.shared.isEmpty
@@ -188,7 +188,7 @@ final class KeywordLayer: TextDrivenLayer {
     private var hitAlready = Set<String>()
 
     override func analyze() -> LayerOutput? {
-        let words = Settings.shared.watchKeywords
+        let words = Settings.shared.live.watchKeywords
             .split(whereSeparator: { ",;\n".contains($0) })
             .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
             .filter { $0.count > 1 }

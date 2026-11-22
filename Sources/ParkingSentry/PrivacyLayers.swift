@@ -27,7 +27,7 @@ final class PrivacyBlurLayer: VideoAILayer {
     enum Target: String, CaseIterable { case faces, people, both }
     /// Read from settings each frame so flipping it takes effect immediately.
     var target: Target {
-        Target(rawValue: Settings.shared.privacyBlurTarget) ?? .faces
+        Target(rawValue: Settings.shared.live.privacyBlurTarget) ?? .faces
     }
 
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
@@ -162,7 +162,7 @@ final class RegionRedactionLayer: VideoAILayer {
     let group = LayerGroup.privacy
     let modality = LayerModality.video
     var availability: LayerAvailability {
-        Settings.shared.redactionRegions.isEmpty
+        Settings.shared.live.redactionRegions.isEmpty
             ? .needsSetup("Draw a region to blank out")
             : .available
     }
@@ -171,7 +171,7 @@ final class RegionRedactionLayer: VideoAILayer {
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
     func process(_ ctx: FrameContext) throws -> LayerOutput? {
-        let regions = Settings.shared.redactionRegions
+        let regions = Settings.shared.live.redactionRegions
         guard !regions.isEmpty else { return nil }
 
         let source = CIImage(cvPixelBuffer: ctx.pixelBuffer)

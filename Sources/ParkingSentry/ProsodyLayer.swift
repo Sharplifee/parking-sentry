@@ -200,7 +200,7 @@ final class TextClassificationLayer: VideoAILayer {
     var availability: LayerAvailability {
         let llm = OnDeviceLLM.shared.status
         guard llm.isUsable else { return llm }
-        if Settings.shared.textCategories.trimmingCharacters(in: .whitespaces).isEmpty {
+        if Settings.shared.live.textCategories.trimmingCharacters(in: .whitespaces).isEmpty {
             return .needsSetup("List your categories in Settings, comma separated")
         }
         return TextBus.shared.isEmpty
@@ -225,7 +225,7 @@ final class TextClassificationLayer: VideoAILayer {
         lock.unlock()
         if let ready { out.lines = [ready]; out.badge = "sorted"; return out }
 
-        let categories = Settings.shared.textCategories.trimmingCharacters(in: .whitespaces)
+        let categories = Settings.shared.live.textCategories.trimmingCharacters(in: .whitespaces)
         guard !categories.isEmpty, !busy, let latest = TextBus.shared.latest,
               latest.text.count > 8, latest.text != answered else { return nil }
         answered = latest.text

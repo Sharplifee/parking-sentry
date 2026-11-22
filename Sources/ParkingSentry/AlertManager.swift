@@ -40,7 +40,8 @@ final class AlertManager: NSObject {
 
         if settings.notificationsEnabled { postNotification(title: title, body: body, snapshot: snapshot) }
         if settings.sirenEnabled { playSiren() }
-        if !settings.webhookURL.isEmpty { postWebhook(url: settings.webhookURL, title: title, body: body) }
+        let webhook = settings.live.webhookURL
+        if !webhook.isEmpty { postWebhook(url: webhook, title: title, body: body) }
     }
 
     // MARK: Local notification

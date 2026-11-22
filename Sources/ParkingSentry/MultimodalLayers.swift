@@ -308,7 +308,7 @@ final class GroundingLayer: VideoAILayer {
     let modality = LayerModality.video
     var availability: LayerAvailability {
         guard KeyStore.hasModelKey else { return .needsSetup("Paste an Anthropic API key in Settings first") }
-        return Settings.shared.groundingQuery.trimmingCharacters(in: .whitespaces).isEmpty
+        return Settings.shared.live.groundingQuery.trimmingCharacters(in: .whitespaces).isEmpty
             ? .needsSetup("Type what to look for in Settings")
             : .needsNetwork("Sends a still image to Anthropic's API each time it runs")
     }
@@ -342,12 +342,12 @@ final class GroundingLayer: VideoAILayer {
                 let rect = CGRect(x: CGFloat(col) / 3.0,
                                   y: CGFloat(2 - row) / 3.0,
                                   width: 1.0 / 3.0, height: 1.0 / 3.0)
-                out.shapes = [.box(rect, label: Settings.shared.groundingQuery, tint: .alert)]
+                out.shapes = [.box(rect, label: Settings.shared.live.groundingQuery, tint: .alert)]
             }
             return out
         }
 
-        let query = Settings.shared.groundingQuery.trimmingCharacters(in: .whitespaces)
+        let query = Settings.shared.live.groundingQuery.trimmingCharacters(in: .whitespaces)
         let interval = max(10, Settings.shared.modelCallInterval)
         guard !query.isEmpty, !busy, Date().timeIntervalSince(lastCall) > interval,
               let key = KeyStore.get("anthropic"),

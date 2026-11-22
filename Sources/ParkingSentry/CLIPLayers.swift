@@ -185,7 +185,7 @@ final class OpenVocabularyLayer: ModelBackedLayer, VideoAILayer {
     let group = LayerGroup.vision
     let modality = LayerModality.video
     var availability: LayerAvailability {
-        guard Settings.shared.groundingQuery.trimmingCharacters(in: .whitespaces).isEmpty == false else {
+        guard Settings.shared.live.groundingQuery.trimmingCharacters(in: .whitespaces).isEmpty == false else {
             return .needsSetup("Type what to look for in Settings")
         }
         // Both towers are needed: one for the phrase, one for the picture.
@@ -234,7 +234,7 @@ final class OpenVocabularyLayer: ModelBackedLayer, VideoAILayer {
     func cool() { CLIPEngine.shared.release() }
 
     func process(_ ctx: FrameContext) throws -> LayerOutput? {
-        let query = Settings.shared.groundingQuery.trimmingCharacters(in: .whitespaces)
+        let query = Settings.shared.live.groundingQuery.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else { return nil }
         guard CLIPEngine.shared.imageReady, CLIPEngine.shared.textReady else {
             ensureModel()
@@ -384,7 +384,7 @@ final class CrossModalRetrievalLayer: ModelBackedLayer, VideoAILayer {
         out.badge = "\(index.count) moments"
 
         // Answer the search when the phrase changes.
-        let query = Settings.shared.retrievalQuery.trimmingCharacters(in: .whitespaces)
+        let query = Settings.shared.live.retrievalQuery.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty, query != lastQuery, CLIPEngine.shared.textReady,
               index.count > 3 else { return out }
         lastQuery = query
