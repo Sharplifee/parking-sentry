@@ -161,6 +161,10 @@ final class PeerMesh: NSObject, ObservableObject {
         found = []
         peers = []
         frames = [:]
+        // Cleared with the frames. Left behind, a stale status line sat under an
+        // empty tile claiming the device was still armed.
+        statusLines = [:]
+        lastFrameAt = [:]
         endTalking()
     }
 
@@ -212,7 +216,18 @@ final class PeerMesh: NSObject, ObservableObject {
             if let cg = ctx.createCGImage(small, from: small.extent),
                let jpeg = UIImage(cgImage: cg).jpegData(compressionQuality: 0.35) {
                 var p = Data([Packet.video.rawValue])
-                let statusData = Data(status.prefix(100).utf8)
+                // Truncated by BYTES, not by characters, and clamped to what the
+                // one-byte length field can hold. `status.prefix(100)` counts
+                // Characters: the status lines carry "·" at two bytes and "—" at
+                // three, so a hundred of them encode to far more than 255 bytes
+                // and `UInt8(count)` would trap. A crash in the sender, triggered
+                // by nothing but the text of a status line.
+                var statusData = Data(status.utf8.prefix(255))
+                // A byte-wise prefix can land mid-character; drop the partial tail
+                // so the receiver is not decoding a broken scalar.
+                while !statusData.isEmpty, String(data: statusData, encoding: .utf8) == nil {
+                    statusData.removeLast()
+                }
                 p.append(UInt8(statusData.count))
                 p.append(statusData)
                 p.append(jpeg)
@@ -258,8 +273,15 @@ final class PeerMesh: NSObject, ObservableObject {
             guard let self, let chan = buf.floatChannelData?[0] else { return }
             let n = Int(buf.frameLength)
             guard n > 0 else { return }
-            var pcm = Data(capacity: n * 2 + 1)
+            // The sample rate travels with the audio. The mic is tapped at whatever
+            // the hardware gives — 48 kHz on every current iPhone — while playback
+            // was hardcoded to 44.1 kHz, so every push-to-talk came out about 9%
+            // slow and a tone and a half low. It sounded like a bad connection
+            // rather than like a bug, which is why it would have survived testing.
+            let rate = UInt32(format.sampleRate.rounded())
+            var pcm = Data(capacity: n * 2 + 5)
             pcm.append(Packet.audio.rawValue)
+            withUnsafeBytes(of: rate.littleEndian) { pcm.append(contentsOf: $0) }
             for i in 0..<n {
                 let v = Int16(max(-1, min(1, chan[i])) * 32000)
                 withUnsafeBytes(of: v.littleEndian) { pcm.append(contentsOf: $0) }
@@ -284,9 +306,28 @@ final class PeerMesh: NSObject, ObservableObject {
         micRunning = false
     }
 
-    private func play(_ pcm: Data) {
-        if playerNode == nil {
-            guard let fmt = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 44100,
+    /// `body` is the audio packet minus its kind byte: a little-endian UInt32
+    /// sample rate followed by mono Int16 samples.
+    private func play(_ body: Data) {
+        guard body.count > 4 else { return }
+        let header = Array(body.prefix(4))
+        let rate = UInt32(header[0]) | UInt32(header[1]) << 8
+                 | UInt32(header[2]) << 16 | UInt32(header[3]) << 24
+        let sampleRate = Double(rate)
+        guard sampleRate >= 8000, sampleRate <= 96000 else { return }
+        let pcm = Data(body.dropFirst(4))
+
+        // Rebuilt if the far end's rate differs from what is already playing —
+        // two devices with different hardware rates, or a device that switched
+        // route mid-call.
+        if playerNode == nil || playbackFormat?.sampleRate != sampleRate {
+            if let old = playerNode {
+                old.stop()
+                playbackEngine.stop()
+                playbackEngine.detach(old)
+                playerNode = nil
+            }
+            guard let fmt = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: sampleRate,
                                           channels: 1, interleaved: true) else { return }
             let node = AVAudioPlayerNode()
             playbackEngine.attach(node)

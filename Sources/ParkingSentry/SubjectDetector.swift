@@ -145,10 +145,32 @@ final class SubjectDetector {
     }
 
     /// Two detectors framing the same thing should produce one subject, not two boxes.
+    ///
+    /// The threshold depends on whether the two boxes claim to be the same kind of
+    /// thing, and a single flat value was wrong in both directions:
+    ///
+    ///   TOO HIGH for a pair of the same class. The person merge above folds a
+    ///   Core ML person into a Vision person at 0.35, but anything below that fell
+    ///   through to a flat 0.55 that could never fire — so a partly occluded figure
+    ///   the two detectors framed slightly differently survived as two subjects,
+    ///   became two tracks, and was counted as two people from then on.
+    ///
+    ///   TOO LOW for a pair of different classes. A person standing in front of a
+    ///   car legitimately overlaps it by well over half, and the lower-confidence
+    ///   box was deleted — so stepping in front of a car made the car stop being
+    ///   detected at all.
     private func dedupe(_ subjects: [DetectedSubject]) -> [DetectedSubject] {
         var kept: [DetectedSubject] = []
         for s in subjects.sorted(by: { $0.confidence > $1.confidence }) {
-            if kept.contains(where: { iou($0.boundingBox, s.boundingBox) > 0.55 }) { continue }
+            let duplicate = kept.contains { k in
+                let sameKind = k.category == s.category
+                    || k.category == .unknown || s.category == .unknown
+                // Different named things are allowed to sit on top of each other;
+                // only near-identical boxes are treated as one.
+                let limit: CGFloat = sameKind ? 0.3 : 0.85
+                return iou(k.boundingBox, s.boundingBox) > limit
+            }
+            if duplicate { continue }
             kept.append(s)
         }
         return kept

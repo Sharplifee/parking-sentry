@@ -633,14 +633,19 @@ final class ColourAttributeLayer: DerivedAILayer {
         // name wrong — red came back "purple", blue came back "teal", green came
         // back "brown" and yellow came back "red". It reads like it was written
         // against atan2(cb, cr) rather than atan2(cr, cb).
+        // Brown and navy are the *muted* dark ends of orange and blue, so both
+        // tests need chroma as well as luma. Pure saturated blue has a luma of
+        // only 29 in this format, so darkness alone would have called every blue
+        // car navy; its chroma is 129 against navy's 38.
+        let muted = chroma < 70
         switch hue {
         case 21..<80:            return luma > 150 ? "pink" : "purple"
         case 80..<124:           return "red"
-        case 124..<155:          return luma < 110 ? "brown" : "orange"
+        case 124..<155:          return (luma < 110 && muted) ? "brown" : "orange"
         case 155..<201:          return "yellow"
         case 201..<260:          return "green"
         case 260..<320:          return "teal"
-        default:                 return luma < 70 ? "navy" : "blue"
+        default:                 return (luma < 70 && muted) ? "navy" : "blue"
         }
     }
 }

@@ -99,8 +99,24 @@ final class MotionGate {
             if delta > noiseFloor {
                 let ratio = c / bg
                 if ratio < 1.0 {
-                    // Darker. Shadow if it dimmed proportionally; real if it went much darker.
-                    isReal = ratio < shadowLow
+                    // Darker. Shadow if it dimmed proportionally, real if it went
+                    // much darker — or if there was no light there to begin with.
+                    //
+                    // A shadow is light being blocked, so it needs light to block.
+                    // In a region the camera already sees as dark there is nothing
+                    // to shade, and anything that darkens it further is occlusion.
+                    // Without that condition the noise floor does the damage: at a
+                    // background luma of 30, a delta of 9 is already a ratio of
+                    // 0.7, which sits inside the shadow band, so every real change
+                    // in a dark part of the frame was thrown away as a shadow.
+                    // That is a false negative at night, in a sentry app, which is
+                    // the one time it most needs to work.
+                    let enoughLightToCastOne = bg > 50
+                    // The band is two-sided, as documented. `shadowHigh` was
+                    // declared, described, and then never referenced, so the
+                    // upper edge did nothing.
+                    let insideShadowBand = ratio >= shadowLow && ratio <= shadowHigh
+                    isReal = !(enoughLightToCastOne && insideShadowBand)
                     if !isReal { shadowed += 1 }
                 } else {
                     // Brighter. Headlights also do this, but Vision downstream will reject them.
@@ -140,6 +156,6 @@ final class MotionGate {
     /// Nudge the background toward the current frame wholesale — used after a lighting step change.
     func relearn() { seeded = false }
 
-    // Unused but kept: shadowHigh documents the upper edge of the rejection band.
+    /// The rejection band, for anything that wants to show how the gate is tuned.
     var shadowBand: ClosedRange<Float> { shadowLow...shadowHigh }
 }

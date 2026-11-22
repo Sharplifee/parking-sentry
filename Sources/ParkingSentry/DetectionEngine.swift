@@ -124,6 +124,23 @@ final class DetectionEngine: NSObject, ObservableObject {
     private let glass = ThroughGlassAnalyzer()
     private var lastGlassRender: Date = .distantPast
     private var lastGlassAlert: Date = .distantPast
+
+    /// Session-queue copies of values whose published versions are written on the
+    /// main thread.
+    ///
+    /// `liveStatusLine` and `evaluateAlert` both run on the capture queue and both
+    /// used to read `@Published` properties directly. For a Bool that is merely a
+    /// stale read; for a String it is a race on a reference-counted object while
+    /// the main thread reassigns it. These mirrors are written on the queue that
+    /// reads them, at the moment the value is computed.
+    /// Width over height of the frames as they arrive. The rotation coordinator
+    /// rotates the connection, so the buffer is already in display orientation and
+    /// this is the aspect the viewer sees. Lateral speed needs it to scale vertical
+    /// movement by the vertical field of view rather than the horizontal one.
+    private var displayAspect: Double = 16.0 / 9.0
+    private var rangeSourceForQueue = "—"
+    private var glassVerdictForQueue = "Idle"
+    private var glassActivityForQueue: Double = 0
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
     private var settings: Settings { Settings.shared }
@@ -639,9 +656,13 @@ final class DetectionEngine: NSObject, ObservableObject {
         let willRedact = settings.blurRecordings && LayerRegistry.shared.producesComposite
         if isRunning, settings.recordClips, !willRedact { clips.ingest(sampleBuffer) }
 
+        let bufferW = CVPixelBufferGetWidth(pixelBuffer)
+        let bufferH = CVPixelBufferGetHeight(pixelBuffer)
+        if bufferW > 0, bufferH > 0 { displayAspect = Double(bufferW) / Double(bufferH) }
+
         ranger.updateIntrinsics(from: sampleBuffer,
-                                bufferWidth: CVPixelBufferGetWidth(pixelBuffer),
-                                bufferHeight: CVPixelBufferGetHeight(pixelBuffer))
+                                bufferWidth: bufferW,
+                                bufferHeight: bufferH)
 
         frameIndex += 1
 
@@ -656,8 +677,14 @@ final class DetectionEngine: NSObject, ObservableObject {
         // "armed" meant two paired devices saw each other and no picture.
         // PeerMesh throttles and downscales internally, so detection still gets
         // the full-resolution buffer.
-        if let composite, settings.blurRecordings {
-            if isRunning, settings.recordClips {
+        // A privacy layer governs everything that leaves this device, not just the
+        // recording. `blurRecordings` decides whether clips are redacted; it has no
+        // business deciding what goes over the air. With it switched off, a device
+        // running the face-blur layer showed a redacted picture on its own screen
+        // and streamed the unredacted feed to every paired device — the one thing
+        // the layer exists to prevent, and invisible from the device doing it.
+        if let composite {
+            if isRunning, settings.recordClips, settings.blurRecordings {
                 clips.ingest(redacted: composite,
                              at: CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds)
             }
@@ -736,7 +763,8 @@ final class DetectionEngine: NSObject, ObservableObject {
         let boxes = tracks.filter { $0.misses <= 2 }.map { t -> BoxOverlay in
             let name = t.label.capitalized
             var text = t.smoothedRange.map { "\(name)  " + Units.distance($0) } ?? name
-            if let mps = t.speed(horizontalFOVRadians: self.fovRadians), mps > 0.3 {
+            if let mps = t.speed(horizontalFOVRadians: self.fovRadians,
+                                 displayAspect: self.displayAspect), mps > 0.3 {
                 text += "  " + Units.speed(mps)
             }
             if let h = t.measuredHeight { text += "  " + Units.height(h) }
@@ -747,6 +775,7 @@ final class DetectionEngine: NSObject, ObservableObject {
                               category: t.category)
         }
 
+        rangeSourceForQueue = sourceLabel
         DispatchQueue.main.async {
             self.overlays = boxes
             self.visionHz = hz
@@ -911,6 +940,9 @@ final class DetectionEngine: NSObject, ObservableObject {
 
         // Rendering is the expensive part, so it runs at a few frames a second
         // while the analysis runs on every frame.
+        glassVerdictForQueue = verdict
+        glassActivityForQueue = r.activity
+
         var rendered: UIImage?
         if Date().timeIntervalSince(lastGlassRender) > 0.2 {
             lastGlassRender = Date()
@@ -979,6 +1011,10 @@ final class DetectionEngine: NSObject, ObservableObject {
             self.glassOccupied = false
             self.glassImage = nil
             self.glassVerdict = on ? "Learning the window…" : "Idle"
+            // Keep the queue-side mirror in step, or a paired device reads the
+            // previous mode's verdict until the next analysed frame.
+            self.glassVerdictForQueue = on ? "Learning the window…" : "Idle"
+            self.glassActivityForQueue = 0
             // Boxes from the normal pipeline would otherwise sit frozen on
             // screen for as long as this mode is on.
             if on { self.overlays = [] }
@@ -1048,14 +1084,14 @@ final class DetectionEngine: NSObject, ObservableObject {
         track.lastAlert = Date()
 
         let rangeText = range.map { Units.distance($0) + " away" } ?? "range unknown"
-        let mps = track.speed(horizontalFOVRadians: fovRadians)
+        let mps = track.speed(horizontalFOVRadians: fovRadians, displayAspect: displayAspect)
         let speedText = (mps != nil && mps! > 0.3)
             ? " · " + Units.speed(mps!) : ""
         let approachText = (track.closingRate.map { $0 < -0.3 } ?? false) ? " · closing" : ""
         let title = track.label.capitalized + " detected"
         let heightText = track.measuredHeight.map { " · " + Units.height($0) + " tall" } ?? ""
         let body = "\(rangeText)\(speedText)\(approachText)\(heightText) · \(Int(audio.currentDB)) dB · "
-            + "\(Int(track.bestConfidence * 100))% confidence · \(rangeSourceLabel) range"
+            + "\(Int(track.bestConfidence * 100))% confidence · \(rangeSourceForQueue) range"
 
         let eventID = UUID()
         clips.trigger(label: track.label, tag: eventID)
@@ -1067,7 +1103,7 @@ final class DetectionEngine: NSObject, ObservableObject {
                                    category: track.category.rawValue,
                                    confidence: track.bestConfidence,
                                    rangeMeters: range,
-                                   rangeSource: rangeSourceLabel == "—" ? nil : rangeSourceLabel,
+                                   rangeSource: rangeSourceForQueue == "—" ? nil : rangeSourceForQueue,
                                    speedMPH: mps.map { $0 * 2.23694 },
                                    closing: track.closingRate.map { $0 < -0.3 },
                                    soundDB: audio.currentDB)
@@ -1122,18 +1158,19 @@ final class DetectionEngine: NSObject, ObservableObject {
         // In glass mode the verdict is the status, so a paired phone watching
         // this device's feed reads "OCCUPIED" rather than "idle".
         if settings.glassMode {
-            return String(format: "glass · %@ · act %.2f", glassVerdict, glassActivity)
+            return String(format: "glass · %@ · act %.2f", glassVerdictForQueue, glassActivityForQueue)
         }
         if let t = tracker.active.first(where: { $0.misses == 0 && $0.hits >= settings.confirmHits }) {
             var s = t.label.capitalized
             if let r = t.smoothedRange { s += " " + Units.distance(r) }
-            if let mps = t.speed(horizontalFOVRadians: fovRadians), mps > 0.3 {
+            if let mps = t.speed(horizontalFOVRadians: fovRadians,
+                                 displayAspect: displayAspect), mps > 0.3 {
                 s += " · " + Units.speed(mps)
             }
             if let h = t.measuredHeight { s += " · " + Units.height(h) }
             return s
         }
-        return isArmed ? String(format: "armed · %.0f dB", soundLevelDB) : "idle"
+        return isArmed ? String(format: "armed · %.0f dB", audio.currentDB) : "idle"
     }
 
     func clearEvents() { events.removeAll() }
