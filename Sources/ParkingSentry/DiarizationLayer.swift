@@ -205,6 +205,17 @@ final class SpeakerDiarizationLayer: ModelBackedLayer, AudioAILayer {
     /// people into one, which is the failure that makes diarization useless.
     private let sameSpeaker: Float = 0.55
 
+    /// A voice that matched nobody, held until it turns up again.
+    ///
+    /// A window is a second and a half of audio and any one of them can be poor —
+    /// a cough, an overlap, a door closing under someone's voice. Minting a
+    /// speaker from a single unmatched window meant two people talking for ten
+    /// minutes produced a running tally of strangers, and the badge said so:
+    /// "speaker 3 of 9" with two people in the room.
+    private var provisional: (centroid: [Float], windows: Int, at: Date)?
+    /// Unmatched windows that agree with each other before a voice is accepted.
+    private let confirmWindows = 2
+
     init() { super.init(modelID: "audio.diarization") }
 
     func warm() { ensureModel() }
@@ -215,7 +226,7 @@ final class SpeakerDiarizationLayer: ModelBackedLayer, AudioAILayer {
         resamplerInputFormat = nil
     }
 
-    func reset() { pending.removeAll(); current = 0 }
+    func reset() { pending.removeAll(); current = 0; provisional = nil }
 
     func process(buffer: AVAudioPCMBuffer, at time: AVAudioTime) -> LayerOutput? {
         guard let model = ModelStore.shared.model(modelID) else { ensureModel(); return nil }
@@ -261,18 +272,44 @@ final class SpeakerDiarizationLayer: ModelBackedLayer, AudioAILayer {
                     speakers[best.index].centroid[i] * (1 - weight) + vector[i] * weight
             }
             current = speakers[best.index].label
+            provisional = nil
+        } else if var waiting = provisional,
+                  now.timeIntervalSince(waiting.at) < 20,
+                  cosine(vector, waiting.centroid) >= sameSpeaker {
+            // Heard this unknown voice before, recently. Average the two windows
+            // so the centroid that eventually enrols is not one unlucky one.
+            waiting.windows += 1
+            waiting.at = now
+            for i in waiting.centroid.indices {
+                waiting.centroid[i] = waiting.centroid[i] * 0.5 + vector[i] * 0.5
+            }
+
+            if waiting.windows >= confirmWindows {
+                let label = nextLabel
+                nextLabel += 1
+                speakers.append(Speaker(label: label, centroid: waiting.centroid,
+                                        windows: waiting.windows, lastHeard: now))
+                current = label
+                provisional = nil
+                out.lines = ["a new voice (speaker \(label))"]
+            } else {
+                provisional = waiting
+            }
         } else {
-            let label = nextLabel
-            nextLabel += 1
-            speakers.append(Speaker(label: label, centroid: vector, windows: 1, lastHeard: now))
-            current = label
-            out.lines = ["a new voice (speaker \(label))"]
+            provisional = (centroid: vector, windows: 1, at: now)
         }
 
         // Forget a voice not heard for twenty minutes.
         speakers.removeAll { now.timeIntervalSince($0.lastHeard) > 1200 }
+        if let waiting = provisional, now.timeIntervalSince(waiting.at) > 20 {
+            provisional = nil
+        }
 
-        out.badge = "speaker \(current) of \(speakers.count)"
+        // Who is talking now, and separately how many voices are on file. These
+        // were one string, so the session's running total of voices read as the
+        // number of people currently in the room.
+        out.badge = current > 0 ? "speaker \(current)" : "listening"
+        out.total = speakers.count > 1 ? "\(speakers.count) voices" : nil
         if current != lastAnnounced {
             lastAnnounced = current
             // Tagging the transcript is the whole point: the text layers read

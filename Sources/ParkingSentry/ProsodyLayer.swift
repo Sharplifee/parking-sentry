@@ -158,15 +158,26 @@ final class ProsodyLayer: AudioAILayer {
         var zeroLag: Float = 0
         vDSP_dotpr(samples, 1, samples, 1, &zeroLag, vDSP_Length(count))
         guard zeroLag > 1e-5 else { return nil }
+        // Energy per sample, so lags of different overlap lengths compare fairly.
+        let zeroLagMean = zeroLag / Float(count)
 
         var bestLag = -1
         var bestValue: Float = 0
         for lag in minLag...maxLag {
+            let overlap = count - lag
+            guard overlap > 0 else { continue }
             var value: Float = 0
-            vDSP_dotpr(samples, 1, samples + lag, 1, &value, vDSP_Length(count - lag))
-            if value > bestValue { bestValue = value; bestLag = lag }
+            vDSP_dotpr(samples, 1, samples + lag, 1, &value, vDSP_Length(overlap))
+            // Divided by the overlap length. A raw autocorrelation sums over
+            // `count - lag` samples, so a short lag has more terms and a larger sum
+            // for the same correlation — the comparison was systematically biased
+            // toward short lags, which is toward high frequencies. That pushed
+            // reported pitch upward, and the agitation score keys off whether pitch
+            // is above 200 Hz, so calm speech drifted toward "animated".
+            let normalized = value / Float(overlap)
+            if normalized > bestValue { bestValue = normalized; bestLag = lag }
         }
-        guard bestLag > 0, bestValue > zeroLag * 0.3 else { return nil }
+        guard bestLag > 0, bestValue > zeroLagMean * 0.3 else { return nil }
         let f0 = sampleRate / Double(bestLag)
         return (f0 > 70 && f0 < 400) ? f0 : nil
     }
@@ -199,30 +210,40 @@ final class TextClassificationLayer: VideoAILayer {
     let preferredInterval = 30
     let warmAtLaunch = false
 
+    /// The model answers on its own thread; `process` reads from the capture queue.
+    private let lock = NSLock()
     private var inFlight = false
     private var answered = ""
     private var pending: String?
 
     func process(_ ctx: FrameContext) throws -> LayerOutput? {
         var out = LayerOutput()
-        if let pending { out.lines = [pending]; out.badge = "sorted"; self.pending = nil; return out }
+        lock.lock()
+        let ready = pending
+        if ready != nil { pending = nil }
+        let busy = inFlight
+        lock.unlock()
+        if let ready { out.lines = [ready]; out.badge = "sorted"; return out }
 
         let categories = Settings.shared.textCategories.trimmingCharacters(in: .whitespaces)
-        guard !categories.isEmpty, !inFlight, let latest = TextBus.shared.latest,
+        guard !categories.isEmpty, !busy, let latest = TextBus.shared.latest,
               latest.text.count > 8, latest.text != answered else { return nil }
         answered = latest.text
-        inFlight = true
+        lock.lock(); inFlight = true; lock.unlock()
 
         OnDeviceLLM.shared.ask(
             instructions: "You assign a single category to a line of text. Reply with the category name alone and nothing else. If none of the categories fit, reply exactly: none.",
             prompt: "Categories: \(categories)\n\nText: \(latest.text)") { [weak self] result in
                 guard let self else { return }
+                self.lock.lock()
                 self.inFlight = false
                 if case .success(let label) = result {
                     let clean = label.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard clean.lowercased() != "none" else { return }
-                    self.pending = "\(clean): \(latest.text)"
+                    if clean.lowercased() != "none" {
+                        self.pending = "\(clean): \(latest.text)"
+                    }
                 }
+                self.lock.unlock()
             }
         return nil
     }

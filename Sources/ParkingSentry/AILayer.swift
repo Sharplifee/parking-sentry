@@ -268,6 +268,50 @@ extension FrameContext {
     }
 }
 
+// MARK: - Cross-thread handoff
+
+/// A result produced on one thread and collected on another.
+///
+/// Several layers kick off work that answers later — a language model, a
+/// translation, a network call — and then read the answer from `process` on the
+/// capture queue. Each of them had its own `inFlight` flag and optional result
+/// written from the callback's thread and read from the capture thread with no
+/// synchronisation at all. An Optional<String> torn across threads is not a stale
+/// read, and the flag deciding whether a second request goes out could be lost,
+/// which means two concurrent calls to a paid API.
+///
+/// One box, used by all of them, rather than the same lock written out five times.
+final class LayerHandoff<Value> {
+    private let lock = NSLock()
+    private var value: Value?
+    private var busy = false
+
+    /// Claims the slot for a request. False means one is already running.
+    func begin() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if busy { return false }
+        busy = true
+        return true
+    }
+
+    /// Records a result and releases the slot.
+    func finish(_ newValue: Value?) {
+        lock.lock(); value = newValue; busy = false; lock.unlock()
+    }
+
+    /// Takes the pending result, if any, leaving the box empty.
+    func take() -> Value? {
+        lock.lock(); defer { lock.unlock() }
+        let v = value
+        value = nil
+        return v
+    }
+
+    func clear() {
+        lock.lock(); value = nil; busy = false; lock.unlock()
+    }
+}
+
 // MARK: - Layer protocols
 
 protocol AILayer: AnyObject {

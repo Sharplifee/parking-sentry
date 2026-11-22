@@ -175,11 +175,23 @@ final class AudioVisualAnomalyLayer: DerivedAILayer {
     private var soundHistory: [String: Int] = [:]
     private var frames = 0
     private var lastFlag = Date.distantPast
+    /// Timestamp of the newest hit already counted into `soundHistory`.
+    private var countedUpTo = Date.distantPast
 
     func process(_ ctx: FrameContext) -> LayerOutput? {
         frames += 1
         let hits = SoundHub.shared.snapshot.filter { $0.confidence > 0.45 }
-        for h in hits { soundHistory[h.identifier, default: 0] += 1 }
+
+        // Count each hit once, not once per frame. The snapshot is a rolling minute
+        // of history, so re-counting all of it every frame meant a sound heard once
+        // reached a history of thirty within a second — and since novelty is
+        // "heard fewer than four times", nothing in the session was ever novel
+        // after the first eighth of a second. The whole layer was dead and looked
+        // like it was simply never triggering.
+        for h in hits where h.at > countedUpTo {
+            soundHistory[h.identifier, default: 0] += 1
+        }
+        countedUpTo = max(countedUpTo, hits.map(\.at).max() ?? countedUpTo)
 
         // A sound is novel if it has barely been heard in this session.
         let recent = hits.filter { Date().timeIntervalSince($0.at) < 4 }
@@ -226,34 +238,50 @@ final class SceneDescriptionLayer: VideoAILayer {
 
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
     private var lastCall = Date.distantPast
+    /// The network reply lands on URLSession's thread while `process` reads these
+    /// from the capture queue. Unsynchronised, that is a race on an Optional<String>
+    /// and on a Bool that gates whether a second request goes out.
+    private let lock = NSLock()
     private var inFlight = false
     private var latest: String?
     private var failure: String?
 
-    func cool() { latest = nil; failure = nil }
+    func cool() {
+        lock.lock(); latest = nil; failure = nil; lock.unlock()
+    }
 
     func process(_ ctx: FrameContext) throws -> LayerOutput? {
         var out = LayerOutput()
-        if let failure { out.lines = [failure]; out.badge = "error"; self.failure = nil; return out }
-        if let latest { out.lines = [latest]; out.badge = "described"; self.latest = nil; return out }
+        lock.lock()
+        let pendingFailure = failure
+        let pendingLatest = latest
+        if pendingFailure != nil { failure = nil }
+        else if pendingLatest != nil { latest = nil }
+        let busy = inFlight
+        lock.unlock()
+
+        if let pendingFailure { out.lines = [pendingFailure]; out.badge = "error"; return out }
+        if let pendingLatest { out.lines = [pendingLatest]; out.badge = "described"; return out }
 
         let interval = max(10, Settings.shared.modelCallInterval)
-        guard !inFlight, Date().timeIntervalSince(lastCall) > interval else { return nil }
+        guard !busy, Date().timeIntervalSince(lastCall) > interval else { return nil }
         guard let key = KeyStore.get("anthropic"), let jpeg = jpegData(from: ctx.pixelBuffer)
         else { return nil }
 
         lastCall = Date()
-        inFlight = true
+        lock.lock(); inFlight = true; lock.unlock()
         ModelClient.describe(image: jpeg, key: key,
                              prompt: "Describe this security camera view in two sentences. Note anything a person watching for trouble would want flagged. Be specific and factual; do not speculate about intent.") { [weak self] result in
             guard let self else { return }
+            self.lock.lock()
             self.inFlight = false
             switch result {
-            case .success(let text):
-                self.latest = text
+            case .success(let text): self.latest = text
+            case .failure(let error): self.failure = error.localizedDescription
+            }
+            self.lock.unlock()
+            if case .success(let text) = result {
                 TextBus.shared.add(text, source: "vision model")
-            case .failure(let error):
-                self.failure = error.localizedDescription
             }
         }
         return nil
@@ -289,15 +317,23 @@ final class GroundingLayer: VideoAILayer {
 
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
     private var lastCall = Date.distantPast
+    /// Same cross-thread handoff as the description layer: the reply arrives on
+    /// URLSession's thread, `process` reads it from the capture queue.
+    private let lock = NSLock()
     private var inFlight = false
     private var answer: (found: Bool, cell: Int, note: String)?
 
-    func cool() { answer = nil }
+    func cool() { lock.lock(); answer = nil; lock.unlock() }
 
     func process(_ ctx: FrameContext) throws -> LayerOutput? {
         var out = LayerOutput()
-        if let answer {
-            self.answer = nil
+        lock.lock()
+        let pending = answer
+        if pending != nil { answer = nil }
+        let busy = inFlight
+        lock.unlock()
+
+        if let answer = pending {
             out.badge = answer.found ? "found" : "not found"
             out.lines = [answer.note]
             if answer.found, answer.cell >= 0, answer.cell < 9 {
@@ -313,12 +349,12 @@ final class GroundingLayer: VideoAILayer {
 
         let query = Settings.shared.groundingQuery.trimmingCharacters(in: .whitespaces)
         let interval = max(10, Settings.shared.modelCallInterval)
-        guard !query.isEmpty, !inFlight, Date().timeIntervalSince(lastCall) > interval,
+        guard !query.isEmpty, !busy, Date().timeIntervalSince(lastCall) > interval,
               let key = KeyStore.get("anthropic"),
               let jpeg = jpeg(from: ctx.pixelBuffer) else { return nil }
 
         lastCall = Date()
-        inFlight = true
+        lock.lock(); inFlight = true; lock.unlock()
         let prompt = """
         Is there \(query) visible in this image? Answer with exactly one line in this format and nothing else:
         FOUND|<cell 0-8, numbered left to right then top to bottom in a 3x3 grid>|<short reason>
@@ -327,6 +363,7 @@ final class GroundingLayer: VideoAILayer {
         """
         ModelClient.describe(image: jpeg, key: key, prompt: prompt) { [weak self] result in
             guard let self else { return }
+            self.lock.lock()
             self.inFlight = false
             switch result {
             case .success(let text):
@@ -338,6 +375,7 @@ final class GroundingLayer: VideoAILayer {
             case .failure(let error):
                 self.answer = (false, -1, error.localizedDescription)
             }
+            self.lock.unlock()
         }
         return nil
     }

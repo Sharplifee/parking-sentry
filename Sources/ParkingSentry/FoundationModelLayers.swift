@@ -136,21 +136,22 @@ final class SummarizationLayer: VideoAILayer {
     let warmAtLaunch = false
 
     private var lastRun = Date.distantPast
-    private var inFlight = false
-    private var pending: String?
-    private var failure: String?
+    private let handoff = LayerHandoff<(text: String, failed: Bool)>()
 
     func process(_ ctx: FrameContext) throws -> LayerOutput? {
         var out = LayerOutput()
-        if let pending { out.lines = [pending]; out.badge = "summary"; self.pending = nil; return out }
-        if let failure { out.lines = [failure]; out.badge = "error"; self.failure = nil; return out }
+        if let ready = handoff.take() {
+            out.lines = [ready.text]
+            out.badge = ready.failed ? "error" : "summary"
+            return out
+        }
 
         // Every two minutes, and only when there is genuinely new material.
-        guard !inFlight, Date().timeIntervalSince(lastRun) > 120 else { return nil }
+        guard Date().timeIntervalSince(lastRun) > 120 else { return nil }
         let entries = TextBus.shared.recent(seconds: 900)
         guard entries.count >= 4 else { return nil }
+        guard handoff.begin() else { return nil }
         lastRun = Date()
-        inFlight = true
 
         let material = entries.suffix(80)
             .map { "[\($0.source)] \($0.text)" }
@@ -160,13 +161,12 @@ final class SummarizationLayer: VideoAILayer {
             instructions: "You summarize security camera logs. Be factual and brief. Report only what the log states; never speculate about intent or identity. If the log is trivial, say so in one line.",
             prompt: "Summarize what happened, in at most three sentences:\n\n\(material)") { [weak self] result in
                 guard let self else { return }
-                self.inFlight = false
                 switch result {
                 case .success(let text):
-                    self.pending = text
+                    self.handoff.finish((text, false))
                     TextBus.shared.add("summary: " + text, source: "summary")
                 case .failure(let error):
-                    self.failure = error.localizedDescription
+                    self.handoff.finish((error.localizedDescription, true))
                 }
             }
         return nil
@@ -203,17 +203,18 @@ final class QuestionAnsweringLayer: VideoAILayer {
     let warmAtLaunch = false
 
     private var askedFor = ""
-    private var inFlight = false
-    private var answer: String?
-    private var failure: String?
+    private let handoff = LayerHandoff<(text: String, failed: Bool)>()
 
     func process(_ ctx: FrameContext) throws -> LayerOutput? {
         var out = LayerOutput()
-        if let answer { out.lines = [answer]; out.badge = "answered"; self.answer = nil; return out }
-        if let failure { out.lines = [failure]; out.badge = "error"; self.failure = nil; return out }
+        if let ready = handoff.take() {
+            out.lines = [ready.text]
+            out.badge = ready.failed ? "error" : "answered"
+            return out
+        }
 
         let question = Settings.shared.llmQuestion.trimmingCharacters(in: .whitespaces)
-        guard !question.isEmpty, !inFlight else { return nil }
+        guard !question.isEmpty else { return nil }
         let entries = TextBus.shared.recent(seconds: 1800)
         guard !entries.isEmpty else { return nil }
 
@@ -221,8 +222,8 @@ final class QuestionAnsweringLayer: VideoAILayer {
         // arrived, rather than every thirty frames.
         let fingerprint = "\(question)|\(entries.count)"
         guard fingerprint != askedFor else { return nil }
+        guard handoff.begin() else { return nil }
         askedFor = fingerprint
-        inFlight = true
 
         let material = entries.suffix(80)
             .map { "[\($0.source)] \($0.text)" }
@@ -232,10 +233,9 @@ final class QuestionAnsweringLayer: VideoAILayer {
             instructions: "You answer questions about a security camera's log. Use only the log provided. If the log does not contain the answer, say exactly that — never guess, and never infer intent or identity. Answer in one or two sentences.",
             prompt: "Log:\n\(material)\n\nQuestion: \(question)") { [weak self] result in
                 guard let self else { return }
-                self.inFlight = false
                 switch result {
-                case .success(let text): self.answer = "Q: \(question)\nA: \(text)"
-                case .failure(let error): self.failure = error.localizedDescription
+                case .success(let text): self.handoff.finish(("Q: \(question)\nA: \(text)", false))
+                case .failure(let error): self.handoff.finish((error.localizedDescription, true))
                 }
             }
         return nil
@@ -281,8 +281,7 @@ final class OnDeviceTranslationLayer: VideoAILayer {
     let warmAtLaunch = false
 
     private var lastTranslated = ""
-    private var pending: String?
-    private var inFlight = false
+    private let handoff = LayerHandoff<(text: String, failed: Bool)>()
 
     func warm() {
         TranslationBridge.shared.refreshStatus()
@@ -290,23 +289,26 @@ final class OnDeviceTranslationLayer: VideoAILayer {
 
     func process(_ ctx: FrameContext) throws -> LayerOutput? {
         var out = LayerOutput()
-        if let pending { out.lines = [pending]; out.badge = "translated"; self.pending = nil; return out }
+        if let ready = handoff.take() {
+            out.lines = [ready.text]
+            out.badge = ready.failed ? "error" : "translated"
+            return out
+        }
 
-        guard !inFlight, let latest = TextBus.shared.latest,
+        guard let latest = TextBus.shared.latest,
               latest.source != "translation", latest.text != lastTranslated,
               latest.text.count > 4 else { return nil }
+        guard handoff.begin() else { return nil }
         lastTranslated = latest.text
-        inFlight = true
 
         TranslationBridge.shared.translate(latest.text) { [weak self] result in
             guard let self else { return }
-            self.inFlight = false
             switch result {
             case .success(let text):
-                self.pending = text
+                self.handoff.finish((text, false))
                 TextBus.shared.add(text, source: "translation")
             case .failure(let error):
-                self.pending = "translation failed: \(error.localizedDescription)"
+                self.handoff.finish(("translation failed: \(error.localizedDescription)", true))
             }
         }
         return nil

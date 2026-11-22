@@ -261,18 +261,34 @@ final class OpenVocabularyLayer: ModelBackedLayer, VideoAILayer {
         }
         guard best.1 > -1 else { return nil }
 
-        out.badge = String(format: "%.2f", best.1)
+        out.badge = best.1 >= floor ? String(format: "found %.2f", best.1)
+                                    : String(format: "%.2f", best.1)
         if best.1 >= floor {
             if let box = best.0 {
                 out.shapes = [.box(box, label: String(format: "%@ %.2f", query, best.1),
                                    tint: .alert)]
-                out.lines = [String(format: "\"%@\" found, score %.2f", query, best.1)]
-            } else {
-                out.lines = [String(format: "\"%@\" may be in frame, score %.2f (no box — nothing was detected to attach it to)", query, best.1)]
             }
+            // Announced on the transition into "found" and then at most every
+            // twenty seconds, rather than on every run. At interval 12 this layer
+            // runs two or three times a second, so an unfiltered line meant the
+            // output feed filled with the same sentence and nothing else in it was
+            // readable.
+            let now = Date()
+            if !wasFound || now.timeIntervalSince(lastAnnounced) > 20 {
+                lastAnnounced = now
+                out.lines = best.0 != nil
+                    ? [String(format: "\"%@\" found, score %.2f", query, best.1)]
+                    : [String(format: "\"%@\" may be in frame, score %.2f (no box — nothing was detected to attach it to)", query, best.1)]
+            }
+            wasFound = true
+        } else {
+            wasFound = false
         }
         return out
     }
+
+    private var wasFound = false
+    private var lastAnnounced = Date.distantPast
 }
 
 // MARK: - Cross-modal retrieval
