@@ -109,6 +109,12 @@ final class ModelStore: ObservableObject {
                 model: 48_315, weights: 19_296_256,
                 license: "SFace, OpenCV Zoo"),
 
+            "audio.diarization": mine(
+                "audio.diarization", "Speaker voice prints",
+                pkg: "SpeakerEmbedding.mlpackage",
+                model: 59_260, weights: 13_264_960,
+                license: "WeSpeaker, CC-BY-4.0"),
+
             "faces.emotion": mine(
                 "faces.emotion", "Facial expression",
                 pkg: "FacialEmotion.mlpackage",

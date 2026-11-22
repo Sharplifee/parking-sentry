@@ -443,11 +443,6 @@ final class TranscriptionLayer: AudioAILayer {
 enum AudioLayerGaps {
     static func all() -> [AILayer] {
         [
-            UnavailableLayer(
-                id: "audio.diarization", title: "Speaker identification",
-                detail: "Telling who is speaking, and separating overlapping speakers.",
-                group: .audio, modality: .audio,
-                availability: .noPublicAPI("No public on-device diarization API. SFSpeechRecognizer returns text with no speaker attribution. Needs a bundled embedding model plus clustering."))
         ]
     }
 }

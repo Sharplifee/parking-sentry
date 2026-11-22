@@ -49,7 +49,8 @@ enum LayerCatalog {
             SoundEventLayer(),
             NoiseProfileLayer(),
             TranscriptionLayer(),
-            ProsodyLayer()
+            ProsodyLayer(),
+            SpeakerDiarizationLayer()
         ]
 
         // Language.
