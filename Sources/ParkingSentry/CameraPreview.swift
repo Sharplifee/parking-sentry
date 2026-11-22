@@ -7,6 +7,18 @@ import UIKit
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
     let overlays: [BoxOverlay]
+    /// Whether this preview is the one on the device's own screen.
+    ///
+    /// The engine keeps a reference to *the* preview layer and converts every
+    /// normalized rect through it — detection boxes, the layer overlay, drawn
+    /// zones, the tinted-glass region. There is a second preview on the external
+    /// display wall, and because it ran the same setup it overwrote that
+    /// reference with the external screen's layer. From the moment a display or
+    /// AirPlay receiver attached, every overlay on the phone was being mapped
+    /// through a geometry belonging to a different screen, and the rotation
+    /// coordinator was rebuilt against it too. The big screen never needs to own
+    /// that reference, so it says so.
+    var isPrimary: Bool = true
 
     func makeUIView(context: Context) -> PreviewContainer {
         let v = PreviewContainer()
@@ -15,7 +27,7 @@ struct CameraPreview: UIViewRepresentable {
         // Hand the layer to the engine so the rotation coordinator can drive it;
         // without this the preview never rotates and the overlay maths is wrong
         // on any device not held in the default orientation.
-        DetectionEngine.shared?.previewLayer = v.previewLayer
+        if isPrimary { DetectionEngine.shared?.previewLayer = v.previewLayer }
         return v
     }
 

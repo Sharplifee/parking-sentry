@@ -48,8 +48,8 @@ struct SettingsView: View {
                         Text("Whole people").tag("people")
                         Text("Both").tag("both")
                     }
-                    Toggle("Keep the blur in recordings and the stream", isOn: $settings.blurRecordings)
-                    Text("With this off, the redaction is only on this screen — clips and anything a paired device sees keep the original faces.")
+                    Toggle("Keep the blur in recordings", isOn: $settings.blurRecordings)
+                    Text("With this off, saved clips keep the original faces. What a paired device sees is always blurred while the layer is on — a redaction that held on this screen but not over the air would not be a redaction.")
                         .font(.caption).foregroundStyle(.secondary)
 
                     TextField("Ask a question about what the camera sees", text: $settings.llmQuestion)

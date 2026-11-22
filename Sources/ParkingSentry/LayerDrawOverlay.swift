@@ -142,8 +142,13 @@ struct LayerDrawOverlay: View {
         mode = nil
     }
 
+    /// Clipped to the frame by intersection. Clamping the origin and the size
+    /// separately, as this did, lets a drag that ends off the edge of the screen
+    /// produce a rect whose far edge sits past 1.0 — a zone partly outside the
+    /// picture it is supposed to describe.
     private func rectBetween(_ a: CGPoint, _ b: CGPoint) -> CGRect {
-        CGRect(x: max(0, min(a.x, b.x)), y: max(0, min(a.y, b.y)),
-               width: min(1, abs(b.x - a.x)), height: min(1, abs(b.y - a.y)))
+        CGRect(x: min(a.x, b.x), y: min(a.y, b.y),
+               width: abs(b.x - a.x), height: abs(b.y - a.y))
+            .intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
     }
 }

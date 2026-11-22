@@ -84,7 +84,8 @@ struct ExternalWallView: View {
 
     private var localTile: some View {
         ZStack(alignment: .bottomLeading) {
-            CameraPreview(session: engine.session, overlays: engine.overlays)
+            CameraPreview(session: engine.session, overlays: engine.overlays,
+                          isPrimary: false)
             caption("This device", engine.isArmed ? engine.status : "idle")
         }
         .aspectRatio(16.0 / 9.0, contentMode: .fit)

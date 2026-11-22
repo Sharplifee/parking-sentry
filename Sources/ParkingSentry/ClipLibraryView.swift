@@ -61,7 +61,11 @@ struct ClipLibraryView: View {
                     HStack {
                         Text("\(engine.clipURLs.count) clips")
                         Spacer()
-                        Text(ByteCountFormatter.string(fromByteCount: ClipRecorder.storageUsed(),
+                        // The cached figure, not a fresh directory walk. Calling
+                        // storageUsed() from a view body re-enumerated the clips
+                        // folder and stat'd every file on the main thread on each
+                        // re-render.
+                        Text(ByteCountFormatter.string(fromByteCount: storage.used,
                                                        countStyle: .file))
                     }
                     .font(.caption).foregroundStyle(.secondary)
