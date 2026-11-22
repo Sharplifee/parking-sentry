@@ -32,15 +32,16 @@ final class ModelStore: ObservableObject {
         /// A `.mlpackage` is a directory, so each model is several files that get
         /// reassembled into that structure locally.
         let files: [(path: String, bytes: Int)]
-        let repo: String
-        let sha: String
+        /// Everything before the package name. Hugging Face for Apple's own
+        /// conversions, this repository for the ones converted here.
+        let base: String
         let packageName: String
         let license: String
 
         var totalBytes: Int { files.reduce(0) { $0 + $1.bytes } }
 
         func url(for path: String) -> URL? {
-            URL(string: "https://huggingface.co/\(repo)/resolve/\(sha)/\(packageName)/\(path)")
+            URL(string: "\(base)/\(packageName)/\(path)")
         }
     }
 
@@ -56,7 +57,21 @@ final class ModelStore: ObservableObject {
                    files: [("Data/com.apple.CoreML/model.mlmodel", model),
                            ("Data/com.apple.CoreML/weights/weight.bin", weights),
                            ("Manifest.json", 617)],
-                   repo: repo, sha: sha, packageName: pkg, license: license)
+                   base: "https://huggingface.co/\(repo)/resolve/\(sha)",
+                   packageName: pkg, license: license)
+        }
+
+        /// Models converted from ONNX here and committed to this repository.
+        /// Pinned by exact byte count rather than by commit, since the branch is
+        /// one I control and the size check still catches a truncated download.
+        func mine(_ id: String, _ title: String, pkg: String,
+                  model: Int, weights: Int, license: String) -> Remote {
+            Remote(id: id, title: title,
+                   files: [("Data/com.apple.CoreML/model.mlmodel", model),
+                           ("Data/com.apple.CoreML/weights/weight.bin", weights),
+                           ("Manifest.json", 617)],
+                   base: "https://raw.githubusercontent.com/Sharplifee/parking-sentry/main/Models",
+                   packageName: pkg, license: license)
         }
 
         return [
@@ -86,7 +101,19 @@ final class ModelStore: ObservableObject {
                 repo: "apple/coreml-mobileclip",
                 sha: "3e0a7bfb9fe83da8a3efaa3fd8f7df24214bb947",
                 pkg: "mobileclip_s0_text.mlpackage",
-                model: 57_953, weights: 84_871_616, license: "Apple ML Research")
+                model: 57_953, weights: 84_871_616, license: "Apple ML Research"),
+
+            "faces.identity": mine(
+                "faces.identity", "Face recognition",
+                pkg: "FaceEmbedding.mlpackage",
+                model: 48_315, weights: 19_296_256,
+                license: "SFace, OpenCV Zoo"),
+
+            "faces.emotion": mine(
+                "faces.emotion", "Facial expression",
+                pkg: "FacialEmotion.mlpackage",
+                model: 21_289, weights: 17_517_056,
+                license: "FER+, Apache-2.0")
         ]
     }()
 

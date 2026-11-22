@@ -641,15 +641,10 @@ final class UnavailableLayer: AILayer {
     static func visionGaps() -> [AILayer] {
         [
             UnavailableLayer(
-                id: "faces.identity", title: "Face recognition (identity)",
-                detail: "Matching a face to a named person.",
+                id: "faces.ageGender", title: "Age and gender estimation",
+                detail: "Guessing a person's age bracket and gender from their face.",
                 group: .vision,
-                availability: .noPublicAPI("No faceprint or face-identity API exists — Photos uses private internals. Appearance matching across a session is available instead, under Re-identification.")),
-            UnavailableLayer(
-                id: "faces.attributes", title: "Face attributes",
-                detail: "Age, gender or emotion from a face.",
-                group: .vision,
-                availability: .noPublicAPI("Vision has no face-attribute request of any kind. Needs a bundled classifier, and these models are unreliable enough that acting on their output is a bad idea."))
+                availability: .noPublicAPI("Deliberately not built. Models for this exist and would have been no harder to add than the expression one; they are also wrong often enough that acting on their output is a bad idea, and a sentry camera labelling people by age and gender is a feature worth not building. Expression and head pose are under Face attributes."))
         ]
     }
 }

@@ -37,7 +37,9 @@ enum LayerCatalog {
             MonocularDepthLayer(),
             SemanticSegmentationLayer(),
             OpenVocabularyLayer(),
-            ActionRecognitionLayer()
+            ActionRecognitionLayer(),
+            FaceIdentityLayer(),
+            FaceAttributesLayer()
         ]
         layers += UnavailableLayer.visionGaps()
 
