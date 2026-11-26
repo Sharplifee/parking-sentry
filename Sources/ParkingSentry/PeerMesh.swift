@@ -440,6 +440,15 @@ extension PeerMesh: MCSessionDelegate {
                     RemoteControl.shared.stealth = true
                 case "stealthOff":
                     RemoteControl.shared.stealth = false
+                case "shareOn":
+                    // A propped-up device with camera sharing off shows the
+                    // other end a frozen frame and no way to fix it without
+                    // walking over to it. Remote arming was already possible;
+                    // this was the one piece of taking a device over that still
+                    // needed hands on the device itself.
+                    self.sharesCamera = true
+                case "shareOff":
+                    self.sharesCamera = false
                 default: break
                 }
             }

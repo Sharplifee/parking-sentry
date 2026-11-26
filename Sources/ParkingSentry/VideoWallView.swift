@@ -132,6 +132,13 @@ struct VideoWallView: View {
             Menu {
                 Button("Blackout that screen") { mesh.send(command: "stealthOn", to: p) }
                 Button("Wake that screen") { mesh.send(command: "stealthOff", to: p) }
+                Divider()
+                Button("Start sending its video") { mesh.send(command: "shareOn", to: p) }
+                Button("Stop sending its video") { mesh.send(command: "shareOff", to: p) }
+                Divider()
+                Button("Run my layers on its camera") {
+                    DetectionEngine.shared?.usePeerFeed(peer: p)
+                }
             } label: {
                 Image(systemName: "moon.circle")
                     .padding(9).sentryGlass(Circle(), interactive: true)
