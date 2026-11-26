@@ -72,6 +72,12 @@ struct StatusBar: View {
 
     private var headline: String {
         if engine.cameraProblem != nil { return "Camera unavailable" }
+        // Which camera is being read comes before what is being read from it:
+        // layers behaving oddly on a 480-pixel peer feed is confusing until you
+        // know that is what you are looking at.
+        if let source = engine.feedDescription {
+            return engine.isArmed ? "Watching \(source)" : source
+        }
         if !engine.previewLive { return "Starting camera…" }
         if !engine.isRunning { return "Ready — not watching" }
         if !engine.isArmed { return "Arming in \(engine.armCountdown)s" }
@@ -192,6 +198,7 @@ struct ToolRail: View {
     let onFlip: () -> Void
     let onStealth: () -> Void
     let onWall: () -> Void
+    let onSource: () -> Void
 
     var body: some View {
         SentryGlassGroup(spacing: 8) {
@@ -225,6 +232,15 @@ struct ToolRail: View {
                              tone: settings.glassMode ? .alert : .neutral) {
                 engine.setGlassMode(!settings.glassMode)
             }
+
+            // Which camera the layers run on. Tinted while reading anything
+            // other than this device's own camera, because that is a state the
+            // operator must never have to guess at.
+            SentryToolButton(icon: engine.feedDescription == nil
+                             ? "video" : "video.fill",
+                             label: "Video source",
+                             tone: engine.feedDescription == nil ? .neutral : .alert,
+                             action: onSource)
 
             SentryToolButton(icon: "rectangle.on.rectangle",
                              label: "All devices", action: onWall)

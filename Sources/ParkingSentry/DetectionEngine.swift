@@ -1,4 +1,5 @@
 import AVFoundation
+import MultipeerConnectivity
 import Vision
 import CoreImage
 import UIKit
@@ -88,6 +89,20 @@ final class DetectionEngine: NSObject, ObservableObject {
     /// is no unredacted layer underneath to show through on a dropped frame.
     @Published var composedFrame: UIImage?
 
+    // MARK: Outside feeds
+
+    /// The latest frame from a feed that is not this device's camera, published
+    /// for the preview. An AVCaptureVideoPreviewLayer can only show a capture
+    /// session, so an outside feed reuses the same path a privacy composite
+    /// uses: the capture preview comes off screen and these frames are shown in
+    /// its place, with the layer overlay drawn over them exactly as before.
+    @Published var externalFrame: UIImage?
+    /// What the active outside feed is, or nil when running on the built-in
+    /// camera. Drives the badge in the chrome, so the operator can always tell
+    /// which camera they are looking at.
+    @Published var feedDescription: String?
+    @Published var feedProblem: String?
+
 
     // MARK: Capture
     let session = AVCaptureSession()
@@ -95,6 +110,10 @@ final class DetectionEngine: NSObject, ObservableObject {
     private let videoOutput = AVCaptureVideoDataOutput()
     private let depthOutput = AVCaptureDepthDataOutput()
     private var synchronizer: AVCaptureDataOutputSynchronizer?
+    private var externalFeed: ExternalFeed?
+    private var lastExternalPublish = Date.distantPast
+    private let externalPreviewContext = CIContext(options: [.useSoftwareRenderer: false,
+                                                             .cacheIntermediates: false])
     private var device: AVCaptureDevice?
     private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var rotationObservation: NSKeyValueObservation?
@@ -503,9 +522,15 @@ final class DetectionEngine: NSObject, ObservableObject {
     @discardableResult
     private func attachCamera() -> Bool {
         let position: AVCaptureDevice.Position = settings.useFrontCamera ? .front : .back
+        // `.external` is a USB (UVC) camera. The API is iOS 17 and the
+        // deployment target is 17, but Apple only ever wired it up on USB-C
+        // iPads — on an iPhone the discovery simply returns nothing, which is
+        // why it is listed first and costs nothing to ask for. A plugged-in
+        // camera takes precedence over the built-in one, because plugging one in
+        // is an unambiguous statement of intent.
         let types: [AVCaptureDevice.DeviceType] = position == .back
-            ? [.builtInLiDARDepthCamera, .builtInDualWideCamera, .builtInWideAngleCamera]
-            : [.builtInTrueDepthCamera, .builtInWideAngleCamera]
+            ? [.external, .builtInLiDARDepthCamera, .builtInDualWideCamera, .builtInWideAngleCamera]
+            : [.external, .builtInTrueDepthCamera, .builtInWideAngleCamera]
 
         var found = AVCaptureDevice.DiscoverySession(deviceTypes: types,
                                                      mediaType: .video,
@@ -514,7 +539,7 @@ final class DetectionEngine: NSObject, ObservableObject {
             // iPads vary far more than iPhones in which camera types they expose;
             // fall back to any camera at all rather than showing black.
             found = AVCaptureDevice.DiscoverySession(
-                deviceTypes: [.builtInWideAngleCamera, .builtInDualWideCamera,
+                deviceTypes: [.external, .builtInWideAngleCamera, .builtInDualWideCamera,
                               .builtInTrueDepthCamera, .builtInLiDARDepthCamera],
                 mediaType: .video, position: .unspecified).devices
         }
@@ -643,10 +668,130 @@ final class DetectionEngine: NSObject, ObservableObject {
         }
     }
 
+    // MARK: Outside feeds
+
+    /// Opens a network camera and routes its frames through the whole pipeline.
+    ///
+    /// The capture session is stopped while an outside feed is running. Leaving
+    /// it running would hold the camera, burn power and heat the device for a
+    /// preview nobody is looking at, and on an iPad it would keep the USB camera
+    /// claimed so nothing else could open it.
+    func useExternalFeed(url: URL) {
+        guard let feed = FeedDirectory.feed(for: url) else {
+            DispatchQueue.main.async {
+                self.feedProblem = "MotionSentry can open http:// and https:// addresses. " + FeedDirectory.note
+            }
+            return
+        }
+        use(feed: feed)
+    }
+
+    /// Runs this device's layers on a paired device's camera instead of its own.
+    func usePeerFeed(peer: MCPeerID) {
+        use(feed: PeerFeed(peer: peer))
+    }
+
+    /// Every outside source arrives here, so there is one place that stops the
+    /// camera, swaps the preview over and starts the feed.
+    func use(feed: ExternalFeed) {
+        stopExternalFeed(restoringCamera: false)
+
+        feed.onFrame = { [weak self] buffer, time in
+            self?.ingest(externalFrame: buffer, timestamp: time)
+        }
+        feed.onProblem = { [weak self] text in
+            guard let self else { return }
+            self.feedProblem = text
+            self.stopExternalFeed(restoringCamera: true)
+        }
+        externalFeed = feed
+        lastExternalPublish = .distantPast
+
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            if self.session.isRunning { self.session.stopRunning() }
+        }
+        DispatchQueue.main.async {
+            self.feedProblem = nil
+            self.feedDescription = feed.describing
+            self.previewLive = true
+        }
+        feed.start()
+        EventLog.action("feed.external.selected", ["source": feed.describing])
+    }
+
+    /// Hands the pipeline back to this device's own camera.
+    func stopExternalFeed(restoringCamera: Bool = true) {
+        guard let feed = externalFeed else {
+            if restoringCamera { startPreview() }
+            return
+        }
+        externalFeed = nil
+        feed.onFrame = nil
+        feed.onProblem = nil
+        feed.stop()
+        DispatchQueue.main.async {
+            self.feedDescription = nil
+            self.externalFrame = nil
+            self.overlays = []
+        }
+        if restoringCamera { startPreview() }
+        EventLog.action("feed.external.stopped", ["source": feed.describing])
+    }
+
+    /// A frame from an outside feed, on that feed's own queue.
+    ///
+    /// It goes through exactly the same `process` the camera's frames go
+    /// through, so the motion gate, the detector, every active layer, the
+    /// privacy composite, clip recording and the stream to paired devices all
+    /// behave identically. Range readings are the one thing that changes: an
+    /// outside camera reports no lens intrinsics and no depth, so distances fall
+    /// back to the field-of-view estimate and are correspondingly rougher.
+    func ingest(externalFrame buffer: CVPixelBuffer, timestamp: CMTime) {
+        guard externalFeed != nil else { return }
+        process(pixelBuffer: buffer, depth: nil, timestamp: timestamp, sampleBuffer: nil)
+
+        // The preview only needs to look live, not to show every frame, and
+        // turning a buffer into a UIImage is the most expensive thing on this
+        // path. Twenty a second is indistinguishable from the feed's own rate
+        // and leaves the layers the headroom they need.
+        let now = Date()
+        guard now.timeIntervalSince(lastExternalPublish) >= 0.05 else { return }
+        lastExternalPublish = now
+        let image = CIImage(cvPixelBuffer: buffer)
+        guard let cg = externalPreviewContext.createCGImage(image, from: image.extent) else { return }
+        let ui = UIImage(cgImage: cg)
+        DispatchQueue.main.async { self.externalFrame = ui }
+    }
+
     // MARK: Frame processing
 
     private func handle(sampleBuffer: CMSampleBuffer, depth: AVDepthData?) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        // A frame from this device's own camera, which is the only source that
+        // carries depth, lens intrinsics and a real presentation timestamp.
+        process(pixelBuffer: pixelBuffer,
+                depth: depth,
+                timestamp: CMSampleBufferGetPresentationTimeStamp(sampleBuffer),
+                sampleBuffer: sampleBuffer)
+    }
+
+    /// Everything the app does to a frame, regardless of where the frame came
+    /// from.
+    ///
+    /// `sampleBuffer` is nil for any feed that is not this device's camera — a
+    /// USB camera's frames arrive through the capture session and do carry one, a
+    /// network camera's do not. Three things depend on having one and degrade
+    /// rather than fail without it: the pre-roll recorder takes a different
+    /// ingest path, lens intrinsics are unavailable so range falls back to the
+    /// field-of-view estimate, and the timestamp comes from the feed instead of
+    /// the capture clock. Nothing else in the pipeline can tell the difference,
+    /// which is the point: every layer, the gate, the detector, the privacy
+    /// composite and the peer stream treat an outside camera as the camera.
+    private func process(pixelBuffer: CVPixelBuffer,
+                         depth: AVDepthData?,
+                         timestamp: CMTime,
+                         sampleBuffer: CMSampleBuffer?) {
 
         // Rolling pre-roll buffer: fed always while armed so a clip can start
         // seconds BEFORE the trigger. A clip that begins at the detection has
@@ -654,15 +799,20 @@ final class DetectionEngine: NSObject, ObservableObject {
         // Recording happens after the layer pass below when a privacy layer is
         // compositing, so the clip holds the redacted frame rather than the raw one.
         let willRedact = settings.blurRecordings && LayerRegistry.shared.producesComposite
-        if isRunning, settings.recordClips, !willRedact { clips.ingest(sampleBuffer) }
+        if isRunning, settings.recordClips, !willRedact {
+            if let sampleBuffer { clips.ingest(sampleBuffer) }
+            else { clips.ingest(external: pixelBuffer, at: timestamp.seconds) }
+        }
 
         let bufferW = CVPixelBufferGetWidth(pixelBuffer)
         let bufferH = CVPixelBufferGetHeight(pixelBuffer)
         if bufferW > 0, bufferH > 0 { displayAspect = Double(bufferW) / Double(bufferH) }
 
-        ranger.updateIntrinsics(from: sampleBuffer,
-                                bufferWidth: bufferW,
-                                bufferHeight: bufferH)
+        if let sampleBuffer {
+            ranger.updateIntrinsics(from: sampleBuffer,
+                                    bufferWidth: bufferW,
+                                    bufferHeight: bufferH)
+        }
 
         frameIndex += 1
 
@@ -670,7 +820,7 @@ final class DetectionEngine: NSObject, ObservableObject {
         // layer that only works while armed would be a surprise, and reading a
         // scene is a different act from watching it for intruders.
         let composite = runLayers(pixelBuffer: pixelBuffer, depth: depth,
-                                  sampleBuffer: sampleBuffer)
+                                  timestamp: timestamp)
 
         // Stream to any connected device whether or not detection is armed.
         // Watching a camera and arming it are different things: gating video on
@@ -685,8 +835,7 @@ final class DetectionEngine: NSObject, ObservableObject {
         // the layer exists to prevent, and invisible from the device doing it.
         if let composite {
             if isRunning, settings.recordClips, settings.blurRecordings {
-                clips.ingest(redacted: composite,
-                             at: CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds)
+                clips.ingest(redacted: composite, at: timestamp.seconds)
             }
             PeerMesh.shared.offer(redacted: composite, status: liveStatusLine(), armed: isArmed)
         } else {
@@ -796,7 +945,7 @@ final class DetectionEngine: NSObject, ObservableObject {
     @discardableResult
     private func runLayers(pixelBuffer: CVPixelBuffer,
                            depth: AVDepthData?,
-                           sampleBuffer: CMSampleBuffer) -> CGImage? {
+                           timestamp: CMTime) -> CGImage? {
         let registry = LayerRegistry.shared
 
         // An audio layer needs the microphone whether or not detection is armed,
@@ -839,7 +988,7 @@ final class DetectionEngine: NSObject, ObservableObject {
                                shared: SharedFrameVision(handler: handler),
                                depth: depth,
                                frameIndex: frameIndex,
-                               timestamp: CMSampleBufferGetPresentationTimeStamp(sampleBuffer),
+                               timestamp: timestamp,
                                width: CVPixelBufferGetWidth(pixelBuffer),
                                height: CVPixelBufferGetHeight(pixelBuffer),
                                subjects: lastSubjects,

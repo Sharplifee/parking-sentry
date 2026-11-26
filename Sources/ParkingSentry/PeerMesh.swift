@@ -408,6 +408,12 @@ extension PeerMesh: MCSessionDelegate {
             guard body.count > 2 + len else { return }
             let status = String(decoding: body[2..<(2 + len)], as: UTF8.self)
             let jpeg = Data(body[(2 + len)...])
+            // Handed over before the main-actor hop, so a device chosen as the
+            // layer source decodes on the network queue rather than stuttering
+            // the interface. No-op when nothing has asked for peer frames.
+            if PeerFrameRelay.shared.isTapped {
+                PeerFrameRelay.shared.deliver(peer: peerID, jpeg: jpeg)
+            }
             guard let img = UIImage(data: jpeg) else { return }
             Task { @MainActor in
                 self.frames[peerID] = img

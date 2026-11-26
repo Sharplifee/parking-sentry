@@ -58,6 +58,14 @@ final class ClipRecorder {
         ingest(image: CIImage(cvPixelBuffer: pixels), at: t)
     }
 
+    /// Recording a frame from a feed that is not this device's camera, which has
+    /// a pixel buffer and a wall-clock time but no sample buffer to read a
+    /// presentation timestamp from.
+    func ingest(external pixels: CVPixelBuffer, at seconds: Double) {
+        guard seconds.isFinite else { return }
+        ingest(image: CIImage(cvPixelBuffer: pixels), at: seconds)
+    }
+
     /// Recording a redacted frame. A privacy layer has already composited the
     /// image, and this is the path that keeps the redaction in the clip rather
     /// than only on screen — a blur that exists in the preview and not in the

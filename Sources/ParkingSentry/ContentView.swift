@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var showClips = false
     @State private var showWelcome = !UserDefaults.standard.bool(forKey: "hasSeenWelcome")
     @State private var showWall = false
+    @State private var showSource = false
     @ObservedObject private var remote = RemoteControl.shared
     @ObservedObject private var power = PowerManager.shared
     @State private var pinchStart: CGFloat = 1
@@ -30,10 +31,18 @@ struct ContentView: View {
             // screen entirely and the redacted frames are shown in its place.
             // Drawing the blur on top would leave the unredacted feed underneath,
             // visible on any dropped frame.
-            if engine.composedFrame != nil {
+            // Also used for a feed that is not this device's camera: a capture
+            // preview layer can only display a capture session, so an outside
+            // camera's frames are shown through the same renderer.
+            if engine.composedFrame != nil || engine.feedDescription != nil {
                 RenderedPreview()
                     .environmentObject(engine)
-                    .onTapGesture(count: 2) { engine.flipCamera() }
+                    // Flipping is meaningless on an outside feed, and silently
+                    // switching to the local camera on a double tap would be
+                    // alarming rather than helpful.
+                    .onTapGesture(count: 2) {
+                        if engine.feedDescription == nil { engine.flipCamera() }
+                    }
             } else {
                 CameraPreview(session: engine.session, overlays: engine.overlays)
                     .ignoresSafeArea()
@@ -105,7 +114,8 @@ struct ContentView: View {
                     ToolRail(drawMode: $drawMode,
                              onFlip: { engine.flipCamera(); pinchStart = 1 },
                              onStealth: { enterStealth() },
-                             onWall: { showWall = true })
+                             onWall: { showWall = true },
+                             onSource: { showSource = true })
                         .environmentObject(engine)
                         .environmentObject(settings)
                 }
@@ -157,6 +167,11 @@ struct ContentView: View {
         }
         .fullScreenCover(isPresented: $showWall) { VideoWallView() }
         .sheet(isPresented: $showClips) { ClipLibraryView().environmentObject(engine) }
+        .sheet(isPresented: $showSource) {
+            FeedPickerView()
+                .environmentObject(engine)
+                .environmentObject(settings)
+        }
         .sheet(isPresented: $showLayers) {
             LayerPanelView(focus: panelFocus).environmentObject(engine)
         }

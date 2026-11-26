@@ -366,7 +366,9 @@ struct RenderedPreview: View {
     var body: some View {
         ZStack {
             Color.black
-            if let frame = engine.composedFrame {
+            // A privacy composite always wins: if one exists, showing the
+            // unredacted outside frame instead would defeat it.
+            if let frame = engine.composedFrame ?? engine.externalFrame {
                 Image(uiImage: frame)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
