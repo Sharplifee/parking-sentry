@@ -56,6 +56,12 @@ struct StatusBar: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.white.opacity(Style.dim))
                 }
+                // The row is mostly empty space between the dot and the
+                // chevron, and none of it was tappable — only the glyphs and
+                // the text themselves were, so opening the detail meant hitting
+                // a letter.
+                .frame(minHeight: 32)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
@@ -96,16 +102,16 @@ struct StatusBar: View {
         // width and adding a readout does not mean re-balancing the layout.
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 10)],
                   alignment: .leading, spacing: 6) {
-            readout("motion", String(format: "%.3f", engine.motionScore))
-            readout("shadow", String(format: "%.0f%%", engine.shadowRejectFraction * 100))
-            readout("vision", String(format: "%.0f Hz", engine.visionHz))
+            readout("movement", String(format: "%.3f", engine.motionScore))
+            readout("shadows ignored", String(format: "%.0f%%", engine.shadowRejectFraction * 100))
+            readout("checks a second", String(format: "%.0f", engine.visionHz))
             readout("sound", String(format: "%.0f dB", engine.soundLevelDB))
-            readout("range", engine.rangeSourceLabel)
+            readout("distance from", engine.rangeSourceLabel)
             readout("zoom", String(format: "%.1f×", engine.zoom))
             readout("camera", engine.usingFrontCamera ? "front" : "back")
             readout("power", power.summary)
             if !registry.activeIDs.isEmpty {
-                readout("layers", String(format: "%.1f ms", registry.activeCostMS))
+                readout("layer work", String(format: "%.0f ms a frame", registry.activeCostMS))
             }
         }
     }
@@ -133,59 +139,37 @@ struct LayerDock: View {
     var body: some View {
         let active = registry.all.filter { registry.activeIDs.contains($0.id) }
 
-        VStack(alignment: .leading, spacing: 8) {
-            if !active.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    SentryGlassGroup(spacing: 7) {
-                        HStack(spacing: 7) {
-                        ForEach(active, id: \.id) { layer in
-                            SentryChip(
-                                title: layer.title,
-                                value: registry.outputs[layer.id]?.badge,
-                                total: registry.outputs[layer.id]?.total,
-                                icon: "xmark",
-                                tone: .active) {
-                                    registry.setActive(layer.id, false)
-                                }
-                        }
-                        }
-                        .padding(.horizontal, 2)
-                    }
-                }
-                .frame(height: 34)
-            }
-
-            // Group shortcuts: a direct route into the part of the panel someone
-            // actually wants, with the count of what is on in each.
-            ScrollView(.horizontal, showsIndicators: false) {
-                SentryGlassGroup(spacing: 7) {
+        // One row, not two. This was a row of active layers stacked on a second
+        // row of seven group shortcuts — fourteen chips of furniture on top of
+        // the camera, both scrolling sideways with their ends hidden. The groups
+        // belong in the panel, which already filters by them; what belongs out
+        // here is what is running and the way in.
+        ScrollView(.horizontal, showsIndicators: false) {
+            SentryGlassGroup(spacing: 7) {
                 HStack(spacing: 7) {
-                    SentryChip(title: active.isEmpty ? "Choose layers" : "All layers",
+                    SentryChip(title: active.isEmpty ? "Choose layers" : "Layers",
                                value: active.isEmpty ? nil : "\(active.count)",
                                icon: "square.stack.3d.up",
                                tone: active.isEmpty ? .warn : .neutral) {
                         openPanel(nil)
                     }
-                    // Groups with something switched on come first. The row
-                    // scrolls, but seven chips do not fit on a phone and the
-                    // ones doing work were landing off the right edge.
-                    ForEach(LayerGroup.allCases.sorted {
-                        registry.activeCount(in: $0) > registry.activeCount(in: $1)
-                    }) { group in
-                        let n = registry.activeCount(in: group)
-                        SentryChip(title: group.rawValue,
-                                   value: n > 0 ? "\(n)" : nil,
-                                   icon: group.icon,
-                                   tone: n > 0 ? .active : .neutral) {
-                            openPanel(group)
-                        }
+
+                    ForEach(active, id: \.id) { layer in
+                        SentryChip(
+                            title: layer.title,
+                            value: registry.outputs[layer.id]?.badge,
+                            total: registry.outputs[layer.id]?.total,
+                            icon: "xmark",
+                            tone: .active) {
+                                registry.setActive(layer.id, false)
+                            }
                     }
                 }
                 .padding(.horizontal, 2)
-                }
             }
-            .frame(height: 34)
         }
+        // Tall enough to hold a 44pt touch target rather than clipping it.
+        .frame(height: Style.touch + 6)
     }
 }
 
@@ -229,6 +213,7 @@ struct ToolRail: View {
                     .frame(width: Style.control, height: Style.control)
                     .foregroundStyle(.white)
                     .sentryGlass(Circle(), interactive: true)
+                    .contentShape(Circle())
             }
             .accessibilityLabel("Draw on the feed")
 
@@ -282,6 +267,7 @@ struct ArmButton: View {
                         ? AnyShapeStyle(Color.red.gradient)
                         : AnyShapeStyle(Color.green.gradient),
                         in: Capsule())
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(engine.isRunning ? "Stop watching" : "Start watching")

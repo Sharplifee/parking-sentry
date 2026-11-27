@@ -123,11 +123,15 @@ struct VideoWallView: View {
         return HStack(spacing: 6) {
             Button { mesh.send(command: armed ? "disarm" : "arm", to: p) } label: {
                 Image(systemName: armed ? "shield.slash.fill" : "shield.fill")
-                    .padding(9).sentryGlass(Circle(), interactive: true)
+                    .frame(width: Style.touch, height: Style.touch)
+                    .sentryGlass(Circle(), interactive: true)
+                    .contentShape(Circle())
             }
             Button { mesh.send(command: "flip", to: p) } label: {
                 Image(systemName: "arrow.triangle.2.circlepath.camera")
-                    .padding(9).sentryGlass(Circle(), interactive: true)
+                    .frame(width: Style.touch, height: Style.touch)
+                    .sentryGlass(Circle(), interactive: true)
+                    .contentShape(Circle())
             }
             Menu {
                 Button("Blackout that screen") { mesh.send(command: "stealthOn", to: p) }
@@ -161,8 +165,10 @@ struct VideoWallView: View {
 
     private var closeButton: some View {
         Button { dismiss() } label: {
-            Image(systemName: "xmark").padding(10)
+            Image(systemName: "xmark")
+                .frame(width: Style.touch, height: Style.touch)
                 .sentryGlass(Circle(), interactive: true)
+                .contentShape(Circle())
         }
         .foregroundStyle(.white).padding()
     }
@@ -172,15 +178,19 @@ struct VideoWallView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Label("Hold the mic button to talk", systemImage: "mic.fill")
                     .font(Style.caption).foregroundStyle(.white.opacity(0.6))
-                Text("sent \(mesh.framesSent) · received \(mesh.framesReceived)")
-                    .font(Style.total)
-                    .foregroundStyle(.white.opacity(0.35))
+                if mesh.framesSent > 0 && mesh.framesReceived == 0 {
+                    Text("Sending, but nothing is coming back yet")
+                        .font(Style.total)
+                        .foregroundStyle(.orange.opacity(0.8))
+                }
             }
             Spacer()
             Button { enterStealth() } label: {
                 Label("Stealth", systemImage: "moon.fill")
-                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .padding(.horizontal, 16)
+                    .frame(height: Style.touch)
                     .sentryGlass(Capsule(), interactive: true)
+                    .contentShape(Capsule())
             }
             .foregroundStyle(.white)
         }

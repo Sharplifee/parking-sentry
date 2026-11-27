@@ -145,6 +145,7 @@ struct LayerPanelView: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 14)
                     .stroke(isCurrent ? Color.accentColor.opacity(0.5) : .clear, lineWidth: 1.5))
+            .contentShape(RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)
     }

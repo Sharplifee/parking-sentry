@@ -201,7 +201,7 @@ struct ContentView: View {
 
             Menu {
                 Button { showMesh = true } label: {
-                    Label("Devices", systemImage: "square.grid.2x2")
+                    Label("Pair a device", systemImage: "antenna.radiowaves.left.and.right")
                 }
                 Button { showSettings = true } label: {
                     Label("Settings", systemImage: "slider.horizontal.3")
@@ -218,6 +218,7 @@ struct ContentView: View {
                     .frame(width: Style.control, height: Style.control)
                     .foregroundStyle(.white)
                     .sentryGlass(Circle(), interactive: true)
+                    .contentShape(Circle())
             }
             .accessibilityLabel("More")
         }
@@ -247,6 +248,8 @@ struct EventLogView: View {
                             Button { playing = url } label: {
                                 Label("Watch recording", systemImage: "play.circle.fill")
                                     .font(.caption)
+                                    .frame(minHeight: 32)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .foregroundStyle(.blue)

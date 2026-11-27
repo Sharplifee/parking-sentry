@@ -20,6 +20,9 @@ enum Style {
     /// Tap targets. 44pt is Apple's minimum and smaller is genuinely hard to hit
     /// one-handed on a phone that is propped up somewhere awkward.
     static let control: CGFloat = 46
+    /// Apple's minimum comfortable touch target. Anything tappable gets at
+    /// least this much, whatever it looks like.
+    static let touch: CGFloat = 44
 
     static let gap: CGFloat = 10
     static let inset: CGFloat = 12
@@ -150,7 +153,16 @@ struct SentryChip: View {
                                   lineWidth: 1))
 
         if let action {
-            Button(action: action) { content }.buttonStyle(.plain)
+            Button(action: action) {
+                // The capsule is drawn at its own small size and then sat in a
+                // 44pt-tall frame that is entirely tappable. Chips were about
+                // 28pt tall with no declared hit shape, which is why they had
+                // to be hit exactly on the text.
+                content
+                    .frame(minHeight: Style.touch)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         } else {
             content
         }
@@ -193,6 +205,11 @@ struct SentryToolButton: View {
                     }
                 }
         }
+        // Without this the tappable region is whatever the glyph happens to
+        // paint — the opaque pixels of an SF Symbol and nothing else — so a
+        // 46pt button answered only in the middle of the stroke and felt
+        // broken. The circle makes the whole control tappable.
+        .contentShape(Circle())
         .buttonStyle(.plain)
         .accessibilityLabel(label ?? icon)
     }
