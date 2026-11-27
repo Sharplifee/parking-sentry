@@ -17,7 +17,9 @@ import Combine
 @MainActor
 final class PeerMesh: NSObject, ObservableObject {
 
-    static let shared = PeerMesh()
+    // Reached from the capture queue every frame to hand over video.
+    // The instance is created once at launch and never reassigned.
+    nonisolated(unsafe) static let shared = PeerMesh()
 
     /// Bonjour service type — must match the Info.plist NSBonjourServices entries.
     private static let service = "msentry"

@@ -17,6 +17,22 @@
 import Foundation
 import Network
 
+/// A one-shot flag that is safe to claim from any thread.
+///
+/// `claim()` returns true exactly once, to exactly one caller, however many
+/// threads race for it.
+final class OnceFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var taken = false
+
+    func claim() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if taken { return false }
+        taken = true
+        return true
+    }
+}
+
 @MainActor
 final class FeedDiscovery: ObservableObject {
 
@@ -119,13 +135,17 @@ final class FeedDiscovery: ObservableObject {
     private func resolveAndProbe(endpoint: NWEndpoint, key: String) {
         probing.insert(key)
         let connection = NWConnection(to: endpoint, using: .tcp)
-        var settled = false
+        // The state handler runs on a network queue and can be called more than
+        // once, including .ready and then .cancelled from the cancel below. A
+        // plain captured Bool was being read and written from whichever thread
+        // got there first, so both branches could pass their own guard and the
+        // device would be probed twice and finished twice.
+        let settled = OnceFlag()
 
         connection.stateUpdateHandler = { [weak self] state in
             switch state {
             case .ready:
-                guard !settled else { return }
-                settled = true
+                guard settled.claim() else { return }
                 var host: String?
                 var port: UInt16?
                 if let remote = connection.currentPath?.remoteEndpoint,
@@ -145,8 +165,7 @@ final class FeedDiscovery: ObservableObject {
                     else { self?.finishProbe(key: key, note: "Found, but its address could not be resolved.") }
                 }
             case .failed, .cancelled:
-                guard !settled else { return }
-                settled = true
+                guard settled.claim() else { return }
                 connection.cancel()
                 Task { @MainActor in
                     self?.finishProbe(key: key, note: "Found, but it refused a connection.")
