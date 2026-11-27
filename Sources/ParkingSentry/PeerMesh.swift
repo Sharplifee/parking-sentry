@@ -17,9 +17,11 @@ import Combine
 @MainActor
 final class PeerMesh: NSObject, ObservableObject {
 
-    // Reached from the capture queue every frame to hand over video.
-    // The instance is created once at launch and never reassigned.
-    nonisolated(unsafe) static let shared = PeerMesh()
+    // Reached from the capture queue every frame to hand over video, which
+    // Swift 6 will reject. Marking this nonisolated is not the fix: the
+    // initialiser is itself main-actor isolated, so the declaration stops
+    // compiling. Whatever resolves this has to start with init, not here.
+    static let shared = PeerMesh()
 
     /// Bonjour service type — must match the Info.plist NSBonjourServices entries.
     private static let service = "msentry"
