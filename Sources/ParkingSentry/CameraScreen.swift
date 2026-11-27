@@ -166,7 +166,12 @@ struct LayerDock: View {
                                tone: active.isEmpty ? .warn : .neutral) {
                         openPanel(nil)
                     }
-                    ForEach(LayerGroup.allCases) { group in
+                    // Groups with something switched on come first. The row
+                    // scrolls, but seven chips do not fit on a phone and the
+                    // ones doing work were landing off the right edge.
+                    ForEach(LayerGroup.allCases.sorted {
+                        registry.activeCount(in: $0) > registry.activeCount(in: $1)
+                    }) { group in
                         let n = registry.activeCount(in: group)
                         SentryChip(title: group.rawValue,
                                    value: n > 0 ? "\(n)" : nil,

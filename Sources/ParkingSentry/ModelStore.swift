@@ -76,53 +76,53 @@ final class ModelStore: ObservableObject {
 
         return [
             "depth.mono": make(
-                "depth.mono", "Monocular depth",
+                "depth.mono", "Near and far, no scanner",
                 repo: "apple/coreml-depth-anything-v2-small",
                 sha: "cfef6f6f2a70783dedc0bfae40cecbc2052285d3",
                 pkg: "DepthAnythingV2SmallF16INT8.mlpackage",
                 model: 427_587, weights: 24_967_424, license: "Apache-2.0"),
 
             "segmentation.semantic": make(
-                "segmentation.semantic", "Semantic segmentation",
+                "segmentation.semantic", "Colour in the whole scene",
                 repo: "apple/coreml-detr-semantic-segmentation",
                 sha: "7c771f8867a479d1441ac5fb0a8de31feea76bb6",
                 pkg: "DETRResnet50SemanticSegmentationF16INT8.mlpackage",
                 model: 353_974, weights: 43_005_024, license: "Apache-2.0"),
 
             "clip.image": make(
-                "clip.image", "Image understanding (CLIP)",
+                "clip.image", "Understanding pictures",
                 repo: "apple/coreml-mobileclip",
                 sha: "3e0a7bfb9fe83da8a3efaa3fd8f7df24214bb947",
                 pkg: "mobileclip_s0_image.mlpackage",
                 model: 153_260, weights: 22_717_696, license: "Apple ML Research"),
 
             "clip.text": make(
-                "clip.text", "Text understanding (CLIP)",
+                "clip.text", "Understanding words",
                 repo: "apple/coreml-mobileclip",
                 sha: "3e0a7bfb9fe83da8a3efaa3fd8f7df24214bb947",
                 pkg: "mobileclip_s0_text.mlpackage",
                 model: 57_953, weights: 84_871_616, license: "Apple ML Research"),
 
             "faces.identity": mine(
-                "faces.identity", "Face recognition",
+                "faces.identity", "Seen this face before",
                 pkg: "FaceEmbedding.mlpackage",
                 model: 48_315, weights: 19_296_256,
                 license: "SFace, OpenCV Zoo"),
 
             "faces.age": mine(
-                "faces.age", "Age bracket",
+                "faces.age", "Rough age",
                 pkg: "AgeBracket.mlpackage",
                 model: 113_010, weights: 11_971_200,
                 license: "Levi & Hassner, ONNX Model Zoo, Apache-2.0"),
 
             "faces.gender": mine(
-                "faces.gender", "Gender estimate",
+                "faces.gender", "Gender guess",
                 pkg: "GenderClass.mlpackage",
                 model: 113_007, weights: 11_958_912,
                 license: "Levi & Hassner, ONNX Model Zoo, Apache-2.0"),
 
             "audio.diarization": mine(
-                "audio.diarization", "Speaker voice prints",
+                "audio.diarization", "Telling voices apart",
                 pkg: "SpeakerEmbedding.mlpackage",
                 model: 59_260, weights: 13_264_960,
                 license: "WeSpeaker, CC-BY-4.0"),

@@ -40,6 +40,68 @@ enum COCOClass {
         "bear", "zebra", "giraffe"
     ]
 
+    /// Turns a model's own class name into something a person would say.
+    ///
+    /// The detector's vocabulary is the COCO and PASCAL VOC class list, whose
+    /// names were written for training scripts, not for people: "tvmonitor",
+    /// "pottedplant", "diningtable", "aeroplane". Those were going straight onto
+    /// the screen over the camera. Anything not in this table is already an
+    /// ordinary word — "car", "dog", "person" — and only needs its first letter,
+    /// so the table lists the exceptions rather than all eighty classes.
+    static func readable(_ label: String) -> String {
+        let l = label.lowercased()
+        if let fixed = names[l] { return fixed }
+        // Multi-word class names arrive joined or underscored.
+        let spaced = l.replacingOccurrences(of: "_", with: " ")
+        return spaced.prefix(1).uppercased() + spaced.dropFirst()
+    }
+
+    private static let names: [String: String] = [
+        "tvmonitor": "TV screen",
+        "tv": "TV screen",
+        "pottedplant": "Potted plant",
+        "diningtable": "Dining table",
+        "aeroplane": "Aeroplane",
+        "motorbike": "Motorbike",
+        "sofa": "Sofa",
+        "cell phone": "Phone",
+        "cellphone": "Phone",
+        "mobile phone": "Phone",
+        "remote": "Remote control",
+        "laptop": "Laptop",
+        "keyboard": "Keyboard",
+        "mouse": "Mouse",
+        "wine glass": "Wine glass",
+        "sports ball": "Ball",
+        "baseball bat": "Baseball bat",
+        "baseball glove": "Baseball glove",
+        "tennis racket": "Tennis racket",
+        "hair drier": "Hairdryer",
+        "teddy bear": "Teddy bear",
+        "traffic light": "Traffic light",
+        "fire hydrant": "Fire hydrant",
+        "stop sign": "Stop sign",
+        "parking meter": "Parking meter",
+        "potted plant": "Potted plant",
+        "dining table": "Dining table",
+        "toilet": "Toilet",
+        "tooth brush": "Toothbrush",
+        "toothbrush": "Toothbrush",
+        "hot dog": "Hot dog",
+        "donut": "Doughnut",
+        "backpack": "Backpack",
+        "handbag": "Handbag",
+        "suitcase": "Suitcase",
+        "skis": "Skis",
+        "snowboard": "Snowboard",
+        "surfboard": "Surfboard",
+        "skateboard": "Skateboard",
+        "person": "Person",
+        "bicycle": "Bicycle",
+        "motorcycle": "Motorbike",
+        "airplane": "Aeroplane"
+    ]
+
     static func category(for label: String) -> SubjectCategory {
         let l = label.lowercased()
         if l == "person" { return .person }

@@ -171,8 +171,8 @@ final class KaldiFBank {
 
 final class SpeakerDiarizationLayer: ModelBackedLayer, AudioAILayer {
     let id = "audio.diarization"
-    let title = "Speaker identification"
-    let detail = "Tells voices apart and labels who is speaking. No enrolment needed."
+    let title = "Who is speaking"
+    let detail = "Tells voices apart and labels each one. Nothing to set up first."
     let group = LayerGroup.audio
     let modality = LayerModality.audio
     var availability: LayerAvailability { modelAvailability }

@@ -190,8 +190,8 @@ final class CLIPEngine {
 /// score is shown next to the verdict so the operator can see how sure it is.
 final class OpenVocabularyLayer: ModelBackedLayer, VideoAILayer {
     let id = "clip.find"
-    let title = "Find anything (on-device)"
-    let detail = "Looks for whatever you describe in words. No class list, nothing leaves the device."
+    let title = "Look for anything you describe"
+    let detail = "You type what to watch for in plain words. Nothing leaves this device."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     var availability: LayerAvailability {
@@ -204,7 +204,7 @@ final class OpenVocabularyLayer: ModelBackedLayer, VideoAILayer {
         if case .ready = image, case .ready = text {
             return CLIPTokenizer.shared.ready
                 ? .available
-                : .modelMissing("The CLIP vocabulary did not load from the app bundle")
+                : .modelMissing("The word list this layer needs did not load. Reinstalling the app should fix it.")
         }
         let mb = ((ModelStore.manifest["clip.image"]?.totalBytes ?? 0)
                   + (ModelStore.manifest["clip.text"]?.totalBytes ?? 0)) / 1_000_000
@@ -315,8 +315,8 @@ final class OpenVocabularyLayer: ModelBackedLayer, VideoAILayer {
 /// about 2 KB per minute of watching and reveals nothing on its own.
 final class CrossModalRetrievalLayer: ModelBackedLayer, VideoAILayer {
     let id = "fusion.retrieval"
-    let title = "Search what it saw"
-    let detail = "Indexes moments so you can find them later by describing them in words."
+    let title = "Search back through the session"
+    let detail = "Remembers moments so you can find them later by describing them in words."
     let group = LayerGroup.multimodal
     let modality = LayerModality.video
     var availability: LayerAvailability {

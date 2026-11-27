@@ -15,8 +15,8 @@ import Foundation
 
 final class ObjectLabelLayer: DerivedAILayer {
     let id = "objects"
-    let title = "Object labels"
-    let detail = "Class and confidence for everything the detector names this frame."
+    let title = "What things are"
+    let detail = "Names everything it can see and how sure it is about each one."
     let group = LayerGroup.vision
     let modality = LayerModality.derived
     let availability = LayerAvailability.available
@@ -25,7 +25,7 @@ final class ObjectLabelLayer: DerivedAILayer {
         guard !ctx.subjects.isEmpty else { return nil }
         var out = LayerOutput()
         out.shapes = ctx.subjects.map { s in
-            let caption = String(format: "%@ %.0f%%", s.label, s.confidence * 100)
+            let caption = String(format: "%@ %.0f%%", COCOClass.readable(s.label), s.confidence * 100)
             // When the preview is already outlining this subject with its range
             // and speed, a second outline in a different style around the same
             // person is noise. This then contributes the one thing the preview's
@@ -57,8 +57,8 @@ final class ObjectLabelLayer: DerivedAILayer {
 
 final class TrackingLayer: DerivedAILayer {
     let id = "tracking"
-    let title = "Track IDs & trails"
-    let detail = "Persistent ID per thing, with the path it has taken."
+    let title = "Follow each thing"
+    let detail = "Gives every person, car or animal its own number, keeps it as they move, and draws the path behind them."
     let group = LayerGroup.vision
     let modality = LayerModality.derived
     let availability = LayerAvailability.available
@@ -76,7 +76,7 @@ final class TrackingLayer: DerivedAILayer {
                                          at: CGPoint(x: t.box.maxX, y: t.box.maxY + 0.008),
                                          tint: .primary))
             } else {
-                out.shapes.append(.box(t.box, label: "#\(t.id) \(t.label)", tint: .primary))
+                out.shapes.append(.box(t.box, label: "#\(t.id) \(COCOClass.readable(t.label))", tint: .primary))
             }
             let trail = t.samples.suffix(40).map(\.centre)
             if trail.count > 2 { out.shapes.append(.polyline(Array(trail), tint: .flow)) }
@@ -90,8 +90,8 @@ final class TrackingLayer: DerivedAILayer {
 
 final class BodyPoseLayer: VideoAILayer {
     let id = "pose.body"
-    let title = "Body pose"
-    let detail = "Skeleton joints for every person in frame."
+    let title = "Body position"
+    let detail = "Draws a stick figure on each person so you can see how they are standing or moving."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     let availability = LayerAvailability.available
@@ -133,8 +133,8 @@ final class BodyPoseLayer: VideoAILayer {
 
 final class HandPoseLayer: VideoAILayer {
     let id = "pose.hand"
-    let title = "Hand pose"
-    let detail = "Finger joints, up to four hands."
+    let title = "Hand position"
+    let detail = "Tracks fingers and thumbs, up to four hands at once."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     let availability = LayerAvailability.available
@@ -183,8 +183,8 @@ final class HandPoseLayer: VideoAILayer {
 
 final class FaceLayer: VideoAILayer {
     let id = "faces"
-    let title = "Face detection"
-    let detail = "Face boxes with head angle and capture quality."
+    let title = "Find faces"
+    let detail = "Puts a box on each face, shows which way it is turned, and whether it is clear enough to be useful."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     let availability = LayerAvailability.available
@@ -219,8 +219,8 @@ final class FaceLayer: VideoAILayer {
 
 final class FaceLandmarkLayer: VideoAILayer {
     let id = "faces.landmarks"
-    let title = "Face landmarks"
-    let detail = "Eyes, brows, nose, lips and jaw contour per face."
+    let title = "Face detail"
+    let detail = "Marks the eyes, eyebrows, nose, lips and jawline on each face."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     let availability = LayerAvailability.available
@@ -260,8 +260,8 @@ final class FaceLandmarkLayer: VideoAILayer {
 
 final class SceneTextLayer: VideoAILayer {
     let id = "ocr"
-    let title = "Scene text (OCR)"
-    let detail = "Reads any text in frame — signs, labels, screens."
+    let title = "Read any text"
+    let detail = "Reads writing in view — signs, labels, screens, packaging."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     let availability = LayerAvailability.available
@@ -312,8 +312,8 @@ final class SceneTextLayer: VideoAILayer {
 /// clean, reasonably square-on plates and will miss sharply angled or dirty ones.
 final class PlateLayer: VideoAILayer {
     let id = "anpr"
-    let title = "License plates"
-    let detail = "Plate-shaped text only, character-filtered. Needs a fairly square-on view."
+    let title = "Number plates"
+    let detail = "Reads plates only and ignores other writing. Needs a fairly straight-on view to work."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     let availability = LayerAvailability.available
@@ -398,8 +398,8 @@ final class PlateLayer: VideoAILayer {
 
 final class BarcodeLayer: VideoAILayer {
     let id = "barcodes"
-    let title = "Barcodes & QR"
-    let detail = "Every symbology Vision supports, with the decoded payload."
+    let title = "Barcodes and QR codes"
+    let detail = "Reads every common kind of barcode and QR code, and shows what it says."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     let availability = LayerAvailability.available
@@ -440,8 +440,8 @@ final class BarcodeLayer: VideoAILayer {
 /// in the picture without a language model or a network call.
 final class SceneClassifyLayer: VideoAILayer {
     let id = "scene"
-    let title = "Scene classification"
-    let detail = "Names the scene and its contents from Vision's own classifier, on-device."
+    let title = "What kind of place this is"
+    let detail = "Names the setting and what is in it — a street, a kitchen, a parking lot."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     let availability = LayerAvailability.available
@@ -456,11 +456,11 @@ final class SceneClassifyLayer: VideoAILayer {
         let top = results
             .filter { $0.confidence > 0.12 }
             .prefix(5)
-            .map { String(format: "%@ %.0f%%", $0.identifier, $0.confidence * 100) }
+            .map { String(format: "%@ %.0f%%", COCOClass.readable($0.identifier), $0.confidence * 100) }
         guard !top.isEmpty else { return nil }
 
         var out = LayerOutput()
-        out.badge = results.first.map { $0.identifier } ?? nil
+        out.badge = results.first.map { COCOClass.readable($0.identifier) } ?? nil
         if let first = results.first?.identifier, first != lastTop {
             lastTop = first
             out.lines = [top.joined(separator: ", ")]
@@ -471,8 +471,8 @@ final class SceneClassifyLayer: VideoAILayer {
 
 final class AnimalLayer: VideoAILayer {
     let id = "animals"
-    let title = "Animal recognition"
-    let detail = "Vision's dedicated cat and dog detector, more sensitive than the general one."
+    let title = "Cats and dogs"
+    let detail = "A dedicated cat and dog finder. It catches them in cases where the general one misses."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     let availability = LayerAvailability.available
@@ -491,7 +491,7 @@ final class AnimalLayer: VideoAILayer {
             guard let best = a.labels.first else { continue }
             let score = best.confidence * a.confidence
             out.shapes.append(.box(a.boundingBox,
-                                   label: String(format: "%@ %.0f%%", best.identifier, score * 100),
+                                   label: String(format: "%@ %.0f%%", COCOClass.readable(best.identifier), score * 100),
                                    tint: .animal))
         }
         out.badge = "\(animals.count)"
@@ -501,8 +501,8 @@ final class AnimalLayer: VideoAILayer {
 
 final class HorizonLayer: VideoAILayer {
     let id = "horizon"
-    let title = "Horizon"
-    let detail = "Finds the horizon in the image, for levelling the camera."
+    let title = "Level the camera"
+    let detail = "Finds the horizon and shows how far off level the camera is."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     let availability = LayerAvailability.available
@@ -523,8 +523,8 @@ final class HorizonLayer: VideoAILayer {
 
 final class OrientedBoxLayer: VideoAILayer {
     let id = "rects"
-    let title = "Oriented rectangles"
-    let detail = "Four-corner quads for rectangular things at any angle — signs, plates, doors."
+    let title = "Angled shapes"
+    let detail = "Outlines flat rectangular things — signs, plates, doors — even when they are tilted or seen from the side."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     let availability = LayerAvailability.available
@@ -560,8 +560,8 @@ final class OrientedBoxLayer: VideoAILayer {
 /// "red jacket" actually needs and is reliable in daylight.
 final class ColourAttributeLayer: DerivedAILayer {
     let id = "attributes.colour"
-    let title = "Colour attributes"
-    let detail = "Dominant colour per detection, measured from the pixels. Unreliable under sodium light."
+    let title = "Colours"
+    let detail = "Names the main colour of each thing it finds. Orange street lighting throws this off badly."
     let group = LayerGroup.vision
     let modality = LayerModality.derived
     let availability = LayerAvailability.available

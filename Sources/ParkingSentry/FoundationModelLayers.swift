@@ -121,8 +121,8 @@ enum OSVersion {
 /// last thirty seconds is not worth the tokens.
 final class SummarizationLayer: VideoAILayer {
     let id = "text.summary"
-    let title = "Summarization"
-    let detail = "Condenses the transcript and everything read on screen into a few lines. On-device."
+    let title = "Sum up what happened"
+    let detail = "Boils the transcript and everything read on screen down to a few lines, on this device."
     let group = LayerGroup.language
     let modality = LayerModality.text
     var availability: LayerAvailability {
@@ -185,8 +185,8 @@ final class SummarizationLayer: VideoAILayer {
 /// than no answer.
 final class QuestionAnsweringLayer: VideoAILayer {
     let id = "text.qa"
-    let title = "Question answering"
-    let detail = "Answers a question you set, from what the camera has actually seen and heard."
+    let title = "Answer your question"
+    let detail = "Answers a question you set, using only what the camera has actually seen and heard."
     let group = LayerGroup.language
     let modality = LayerModality.text
     var availability: LayerAvailability {
@@ -253,8 +253,8 @@ final class QuestionAnsweringLayer: VideoAILayer {
 /// that and points at the button in Settings that does the one-time download.
 final class OnDeviceTranslationLayer: VideoAILayer {
     let id = "text.translate"
-    let title = "Translation"
-    let detail = "Translates the transcript on-device, into the language set in Settings."
+    let title = "Translate speech"
+    let detail = "Translates the transcript on this device into the language you pick in Settings."
     let group = LayerGroup.language
     let modality = LayerModality.text
     var availability: LayerAvailability {

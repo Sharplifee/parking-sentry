@@ -57,6 +57,13 @@ struct LayerPanelView: View {
                     modelSection
                     geometrySection
                     if !registry.feed.isEmpty { outputSection }
+                    // The search field floats over the bottom of the list, so
+                    // without this the last row of the last section can never be
+                    // scrolled out from under it.
+                    Color.clear
+                        .frame(height: 44)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
                 }
             }
             .listStyle(.insetGrouped)
@@ -151,7 +158,7 @@ struct LayerPanelView: View {
             HStack {
                 Text("On now")
                 Spacer()
-                Text(String(format: "%.1f ms/frame", registry.activeCostMS))
+                Text(String(format: "%.0f ms a frame", registry.activeCostMS))
                     .font(.caption.monospaced())
                     .foregroundStyle(costColor)
             }
@@ -367,7 +374,7 @@ private struct LayerRow: View {
                 }
 
                 if on, let ms = registry.cost[layer.id], ms > 0.05 {
-                    Text(String(format: "%.1f ms per run", ms))
+                    Text(String(format: "takes %.0f ms each time", ms))
                         .font(.caption2.monospaced())
                         .foregroundStyle(.secondary)
                 }

@@ -20,8 +20,8 @@ import CoreGraphics
 /// numbers mean little and only the margin between candidates carries signal.
 final class ActionRecognitionLayer: ModelBackedLayer, VideoAILayer {
     let id = "action"
-    let title = "Action recognition"
-    let detail = "Names what a person is doing, zero-shot through CLIP. Reads posture, not motion."
+    let title = "What someone is doing"
+    let detail = "Names what a person is doing from the way they are standing — reaching, sitting, bending. It reads the pose, not the movement."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     var availability: LayerAvailability {
@@ -30,11 +30,11 @@ final class ActionRecognitionLayer: ModelBackedLayer, VideoAILayer {
         if case .ready = image, case .ready = text {
             return CLIPTokenizer.shared.ready
                 ? .available
-                : .modelMissing("The CLIP vocabulary did not load from the app bundle")
+                : .modelMissing("The word list this layer needs did not load. Reinstalling the app should fix it.")
         }
         let mb = ((ModelStore.manifest["clip.image"]?.totalBytes ?? 0)
                   + (ModelStore.manifest["clip.text"]?.totalBytes ?? 0)) / 1_000_000
-        return .needsDownload("Needs \(mb) MB of CLIP models — switch on to download once")
+        return .needsDownload("Needs \(mb) MB downloaded once — switch on to get it")
     }
     let preferredInterval = 15
     let warmAtLaunch = false

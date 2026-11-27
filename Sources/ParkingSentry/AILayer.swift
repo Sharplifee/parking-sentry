@@ -37,7 +37,7 @@ enum LayerGroup: String, CaseIterable, Identifiable {
     case vision      = "Vision"
     case audio       = "Audio & Speech"
     case language    = "Language"
-    case multimodal  = "Multimodal"
+    case multimodal  = "Sight & Sound"
     case sensors     = "Sensors"
     case analytics   = "Analytics"
     case privacy     = "Privacy"

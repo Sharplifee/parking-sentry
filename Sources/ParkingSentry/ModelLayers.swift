@@ -59,8 +59,8 @@ class ModelBackedLayer {
 /// LiDAR and the pinhole estimate remain the only sources of actual distance.
 final class MonocularDepthLayer: ModelBackedLayer, VideoAILayer {
     let id = "depth.mono"
-    let title = "Monocular depth"
-    let detail = "Depth from one camera, no LiDAR needed. Relative, not measured distance."
+    let title = "Near and far, no scanner"
+    let detail = "Works out what is close and what is distant using the ordinary camera. It gives you the order, not a distance in feet."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     var availability: LayerAvailability { modelAvailability }
@@ -155,8 +155,8 @@ final class MonocularDepthLayer: ModelBackedLayer, VideoAILayer {
 /// drawn over grass is a different alarm from one over a doorway.
 final class SemanticSegmentationLayer: ModelBackedLayer, VideoAILayer {
     let id = "segmentation.semantic"
-    let title = "Semantic segmentation"
-    let detail = "Labels every pixel — road, sky, building, tree, grass, door, 200 classes."
+    let title = "Colour in the whole scene"
+    let detail = "Shades in every part of the picture by what it is — road, sky, building, tree, grass, door. It knows 200 kinds."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     var availability: LayerAvailability { modelAvailability }

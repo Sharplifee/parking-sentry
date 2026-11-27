@@ -77,7 +77,7 @@ final class OverlayView: UIView {
 
     override func draw(_ rect: CGRect) {
         guard let ctx = UIGraphicsGetCurrentContext(), let convert else { return }
-        ctx.setLineWidth(3)
+        ctx.setLineWidth(2)
 
         for b in boxes {
             let r = convert(b.rect)
@@ -95,15 +95,32 @@ final class OverlayView: UIView {
             ctx.setStrokeColor(color.cgColor)
             ctx.stroke(r)
 
-            let text = b.label as NSString
             let attrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.systemFont(ofSize: 15, weight: .bold),
+                .font: UIFont.systemFont(ofSize: 14, weight: .medium),
                 .foregroundColor: UIColor.black
             ]
-            let size = text.size(withAttributes: attrs)
-            let labelRect = CGRect(x: r.minX,
+            // The caption used to be pinned to the box's left edge with nothing
+            // stopping it, so anything detected near the right of the frame had
+            // its name run off the screen — the most common place to see a
+            // detection is the edge, which is exactly where the label was
+            // unreadable. It is now shortened to what will fit and then slid
+            // back inside the view.
+            var text = b.label as NSString
+            var size = text.size(withAttributes: attrs)
+            let widest = bounds.width - 12
+            if size.width > widest {
+                var shortened = b.label
+                while !shortened.isEmpty,
+                      ((shortened + "…") as NSString).size(withAttributes: attrs).width > widest {
+                    shortened.removeLast()
+                }
+                text = (shortened + "…") as NSString
+                size = text.size(withAttributes: attrs)
+            }
+            let width = size.width + 10
+            let labelRect = CGRect(x: min(max(0, r.minX), bounds.width - width),
                                    y: max(0, r.minY - size.height - 6),
-                                   width: size.width + 10,
+                                   width: width,
                                    height: size.height + 4)
             ctx.setFillColor(color.withAlphaComponent(0.9).cgColor)
             ctx.fill(labelRect)

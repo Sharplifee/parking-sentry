@@ -34,7 +34,9 @@ final class FeedDiscovery: ObservableObject {
         var subtitle: String {
             if let workingURL { return workingURL.absoluteString }
             if let note { return note }
-            if let host { return port.map { "\(host):\($0)" } ?? host }
+            // A raw address — a link-local IPv6 above all — is noise to read and
+            // useless to act on, so it is only shown once it is a working one.
+            if host != nil { return "Checking what it can send…" }
             return kindLabel
         }
 
@@ -213,7 +215,7 @@ final class FeedDiscovery: ObservableObject {
         }
         await MainActor.run {
             self.finishProbe(key: key,
-                             note: "Found at \(host), but no video path answered. Try its address by hand.")
+                             note: "This is on your network but does not serve video. If you know it has a camera, type its address below.")
         }
         EventLog.action("discovery.probe.miss", ["host": host])
     }

@@ -58,8 +58,8 @@ enum KeyStore {
 /// knowing about.
 final class AudioVisualFusionLayer: DerivedAILayer {
     let id = "fusion.av"
-    let title = "Audio-visual fusion"
-    let detail = "Confirms events across both senses, and flags sounds with no visible cause."
+    let title = "Match sound to sight"
+    let detail = "Confirms an event when sight and sound agree, and flags a sound with nothing visible causing it."
     let group = LayerGroup.multimodal
     let modality = LayerModality.derived
     var availability: LayerAvailability {
@@ -115,8 +115,8 @@ final class AudioVisualFusionLayer: DerivedAILayer {
 /// scanning a log actually wants to read.
 final class LiveCaptionLayer: DerivedAILayer {
     let id = "fusion.caption"
-    let title = "Live captioning"
-    let detail = "A single line per moment combining what is seen and what is heard."
+    let title = "Running commentary"
+    let detail = "A single line for each moment, combining what is seen with what is heard."
     let group = LayerGroup.multimodal
     let modality = LayerModality.derived
     let availability = LayerAvailability.available
@@ -162,8 +162,8 @@ final class LiveCaptionLayer: DerivedAILayer {
 /// firing every time a cloud passes.
 final class AudioVisualAnomalyLayer: DerivedAILayer {
     let id = "fusion.anomaly"
-    let title = "Audio-visual anomaly"
-    let detail = "Raises only when sight and sound are both unusual at once."
+    let title = "Odd sight and sound together"
+    let detail = "Speaks up only when what it sees and what it hears are both unusual at the same time."
     let group = LayerGroup.multimodal
     let modality = LayerModality.derived
     var availability: LayerAvailability {
@@ -222,8 +222,8 @@ final class AudioVisualAnomalyLayer: DerivedAILayer {
 /// after a key is pasted in Settings.
 final class SceneDescriptionLayer: VideoAILayer {
     let id = "vlm.describe"
-    let title = "Scene description"
-    let detail = "A written description of the view from a vision model. Sends a still image when it runs."
+    let title = "Describe the view in writing"
+    let detail = "Writes out what is in view. This one sends a still picture off the device each time it runs."
     let group = LayerGroup.multimodal
     let modality = LayerModality.video
     var availability: LayerAvailability {
@@ -302,8 +302,8 @@ final class SceneDescriptionLayer: VideoAILayer {
 /// because a model asked for precise pixel boxes will invent them.
 final class GroundingLayer: VideoAILayer {
     let id = "vlm.grounding"
-    let title = "Find anything"
-    let detail = "Looks for whatever you describe in words — \"a red bag\", \"an open gate\"."
+    let title = "Look for anything, online"
+    let detail = "You describe what to watch for in plain words — \"a red bag\", \"an open gate\". This one sends a still picture off the device each time it runs."
     let group = LayerGroup.multimodal
     let modality = LayerModality.video
     var availability: LayerAvailability {

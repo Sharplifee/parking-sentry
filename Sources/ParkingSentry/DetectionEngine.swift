@@ -910,7 +910,7 @@ final class DetectionEngine: NSObject, ObservableObject {
         }
 
         let boxes = tracks.filter { $0.misses <= 2 }.map { t -> BoxOverlay in
-            let name = t.label.capitalized
+            let name = COCOClass.readable(t.label)
             var text = t.smoothedRange.map { "\(name)  " + Units.distance($0) } ?? name
             if let mps = t.speed(horizontalFOVRadians: self.fovRadians,
                                  displayAspect: self.displayAspect), mps > 0.3 {
@@ -1083,17 +1083,17 @@ final class DetectionEngine: NSObject, ObservableObject {
         if r.exposureLevel < 0.015 {
             verdict = "Too dark to read — shade the glass with your body"
         } else if r.contrast < 0.01 {
-            verdict = "No detail — back off a foot and re-aim off-axis"
+            verdict = "Picture too flat — back off a foot and aim at the glass from more of an angle"
         } else if r.samples < 45 {
             verdict = "Learning the window…"
         } else if occupied {
-            verdict = "OCCUPIED · movement inside"
+            verdict = "Someone is moving inside"
         } else if r.sustained >= threshold * 0.4 {
             verdict = "Possible movement — hold still and keep watching"
         } else {
             verdict = "No movement detected"
         }
-        if r.glare { verdict += " · reflection ignored" }
+        if r.glare { verdict += " · ignoring the reflection" }
 
         // Rendering is the expensive part, so it runs at a few frames a second
         // while the analysis runs on every frame.
@@ -1245,7 +1245,7 @@ final class DetectionEngine: NSObject, ObservableObject {
         let speedText = (mps != nil && mps! > 0.3)
             ? " · " + Units.speed(mps!) : ""
         let approachText = (track.closingRate.map { $0 < -0.3 } ?? false) ? " · closing" : ""
-        let title = track.label.capitalized + " detected"
+        let title = COCOClass.readable(track.label) + " detected"
         let heightText = track.measuredHeight.map { " · " + Units.height($0) + " tall" } ?? ""
         let body = "\(rangeText)\(speedText)\(approachText)\(heightText) · \(Int(audio.currentDB)) dB · "
             + "\(Int(track.bestConfidence * 100))% confidence · \(rangeSourceForQueue) range"
@@ -1268,7 +1268,7 @@ final class DetectionEngine: NSObject, ObservableObject {
 
         let image = jpeg.flatMap { UIImage(data: $0) }
         DispatchQueue.main.async {
-            self.status = "ALERT · \(track.label.capitalized) · \(rangeText)"
+            self.status = "ALERT · \(COCOClass.readable(track.label)) · \(rangeText)"
             self.events.insert(SentryEvent(id: eventID,
                                            date: Date(),
                                            text: body,

@@ -18,8 +18,8 @@ import Accelerate
 /// a claim about a person's inner state, and nothing here can support the second.
 final class ProsodyLayer: AudioAILayer {
     let id = "audio.emotion"
-    let title = "Vocal tone & agitation"
-    let detail = "Measures loudness, pitch and how unsteady the voice is. No emotion model — it reports the signal, not a feeling."
+    let title = "Tone of voice"
+    let detail = "Measures how loud, how high and how unsteady a voice is. It reports what the sound is doing, not what someone feels."
     let group = LayerGroup.audio
     let modality = LayerModality.audio
     let availability = LayerAvailability.available
@@ -193,8 +193,8 @@ final class ProsodyLayer: AudioAILayer {
 /// and available right now.
 final class TextClassificationLayer: VideoAILayer {
     let id = "text.classify"
-    let title = "Text classification"
-    let detail = "Sorts what it hears and reads into categories you name, zero-shot."
+    let title = "Sort into your own categories"
+    let detail = "Sorts what it hears and reads into categories you name yourself. No training needed."
     let group = LayerGroup.language
     let modality = LayerModality.text
     var availability: LayerAvailability {

@@ -15,8 +15,8 @@ import CoreVideo
 /// flags that condition explicitly.
 final class MotionSensorLayer: VideoAILayer {
     let id = "imu"
-    let title = "Device motion"
-    let detail = "Accelerometer and gyro, and a warning when the camera itself is moving."
+    let title = "Is the camera being moved"
+    let detail = "Senses this device's own movement and warns you when the camera itself is being moved or knocked."
     let group = LayerGroup.sensors
     let modality = LayerModality.sensor
     var availability: LayerAvailability {
@@ -79,8 +79,8 @@ final class MotionSensorLayer: VideoAILayer {
 /// says so instead of substituting a guess.
 final class DepthLayer: VideoAILayer {
     let id = "depth"
-    let title = "Depth (LiDAR)"
-    let detail = "True distance per pixel from the LiDAR scanner, nearest in red."
+    let title = "Distance by scanner"
+    let detail = "Real measured distance using the scanner on this device. Nearest shows red."
     let group = LayerGroup.sensors
     let modality = LayerModality.sensor
     var availability: LayerAvailability {
@@ -154,8 +154,8 @@ final class DepthLayer: VideoAILayer {
 /// what the governor reacts to, so that is what it reports.
 final class ThermalLayer: VideoAILayer {
     let id = "thermal"
-    let title = "Device temperature"
-    let detail = "How hot this device is running. No iPhone or iPad has a thermal imager — this is the device's own state, which is what throttles the layers."
+    let title = "How hot this device is"
+    let detail = "How hot this phone or iPad is running. It is the device's own temperature, not the temperature of anything in view, and it is what slows the layers down."
     let group = LayerGroup.sensors
     let modality = LayerModality.sensor
     /// Available, because what it reports is real. It was previously marked as

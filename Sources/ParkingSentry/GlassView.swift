@@ -146,11 +146,16 @@ struct GlassPanel: View {
             }
             .frame(height: 6)
 
+            // These were "act / held / light / detail" with raw figures, which
+            // says nothing to anyone who did not write them. The numbers are
+            // worth keeping — this mode is a judgement call and the operator
+            // should be able to see what it is judging on — but they need to
+            // say what they are.
             HStack(spacing: 12) {
-                num("act", String(format: "%.2f", engine.glassActivity))
-                num("held", String(format: "%.0f%%", engine.glassSustained * 100))
-                num("light", String(format: "%.0f%%", engine.glassExposure * 100))
-                num("detail", String(format: "%.0f%%", engine.glassContrast * 100))
+                num("movement", String(format: "%.0f%%", engine.glassActivity * 100))
+                num("kept up", String(format: "%.0f%%", engine.glassSustained * 100))
+                num("brightness", String(format: "%.0f%%", engine.glassExposure * 100))
+                num("sharpness", String(format: "%.0f%%", engine.glassContrast * 100))
                 Spacer(minLength: 0)
             }
 
@@ -158,7 +163,7 @@ struct GlassPanel: View {
                 Button {
                     editing = true
                 } label: {
-                    Label("Draw window", systemImage: "viewfinder.rectangular")
+                    Label("Pick the window", systemImage: "viewfinder.rectangular")
                         .font(Style.caption)
                 }
                 .buttonStyle(.bordered)
@@ -166,7 +171,7 @@ struct GlassPanel: View {
                 Button {
                     engine.setGlassRegion(settings.glassRegion)
                 } label: {
-                    Label("Reset baseline", systemImage: "arrow.clockwise")
+                    Label("Start over", systemImage: "arrow.clockwise")
                         .font(Style.caption)
                 }
                 .buttonStyle(.bordered)

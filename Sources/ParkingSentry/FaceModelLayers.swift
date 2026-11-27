@@ -134,8 +134,8 @@ enum FaceCrop {
 /// reconstructed or looked up from it, and it stays on the device.
 final class FaceIdentityLayer: ModelBackedLayer, VideoAILayer {
     let id = "faces.identity"
-    let title = "Face recognition"
-    let detail = "Recognises a face as one seen before, and flags one that has not been. No names stored."
+    let title = "Seen this face before"
+    let detail = "Tells you whether a face has been here before, and flags one that has not. No names and no photos are kept."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     var availability: LayerAvailability { modelAvailability }
@@ -381,8 +381,8 @@ final class FaceIdentityLayer: ModelBackedLayer, VideoAILayer {
 /// off independently of expression.
 final class FaceAttributesLayer: ModelBackedLayer, VideoAILayer {
     let id = "faces.attributes"
-    let title = "Face attributes"
-    let detail = "Expression and head pose per face."
+    let title = "Expression and head turn"
+    let detail = "Reads the expression on each face and which way the head is turned."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     var availability: LayerAvailability { modelAvailability }
@@ -513,8 +513,8 @@ final class FaceAttributesLayer: ModelBackedLayer, VideoAILayer {
 /// the example script is simply wrong.
 final class AgeGenderLayer: VideoAILayer {
     let id = "faces.ageGender"
-    let title = "Age & gender estimate"
-    let detail = "A coarse age bracket and a gender guess per face. Often wrong — shown with its confidence."
+    let title = "Rough age and gender"
+    let detail = "A rough age range and a gender guess for each face. It is often wrong, so it always shows how sure it is."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     let preferredInterval = 12

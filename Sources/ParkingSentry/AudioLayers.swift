@@ -155,8 +155,8 @@ final class SoundHub: NSObject, SNResultsObserving {
 
 final class SoundEventLayer: AudioAILayer {
     let id = "sound.events"
-    let title = "Sound events"
-    let detail = "Names what it hears from Apple's built-in classifier — glass, alarms, doors, dogs, speech."
+    let title = "Name what it hears"
+    let detail = "Names sounds it picks up — breaking glass, alarms, doors, dogs, speech."
     let group = LayerGroup.audio
     let modality = LayerModality.audio
     let availability = LayerAvailability.available
@@ -224,8 +224,8 @@ final class SoundEventLayer: AudioAILayer {
 
 final class NoiseProfileLayer: AudioAILayer {
     let id = "sound.noise"
-    let title = "Noise profile"
-    let detail = "What this place sounds like over the last minute, ranked."
+    let title = "What this place sounds like"
+    let detail = "The sounds heard over the last minute, most common first."
     let group = LayerGroup.audio
     let modality = LayerModality.audio
     let availability = LayerAvailability.available
@@ -277,8 +277,8 @@ final class NoiseProfileLayer: AudioAILayer {
 /// now" with far less latency than a classification window.
 final class VoiceActivityLayer: AudioAILayer {
     let id = "audio.vad"
-    let title = "Voice activity"
-    let detail = "Whether someone is speaking right now, from level against ambient. No model."
+    let title = "Is someone talking"
+    let detail = "Tells you when someone is speaking by comparing the level against the background. No model involved."
     let group = LayerGroup.audio
     let modality = LayerModality.audio
     let availability = LayerAvailability.available
@@ -438,8 +438,8 @@ final class SpeechHub {
 
 final class TranscriptionLayer: AudioAILayer {
     let id = "speech.transcript"
-    let title = "Live transcription"
-    let detail = "On-device speech to text. Feeds the language layers."
+    let title = "Write down speech"
+    let detail = "Turns speech into text on this device. Every language layer reads from this one."
     let group = LayerGroup.audio
     let modality = LayerModality.audio
     var availability: LayerAvailability {

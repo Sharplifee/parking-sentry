@@ -118,8 +118,8 @@ enum MaskGrid {
 
 final class PersonSegmentationLayer: VideoAILayer {
     let id = "segmentation.person"
-    let title = "Person segmentation"
-    let detail = "Pixel mask of people, not just a box around them."
+    let title = "Cut out people"
+    let detail = "Traces the exact outline of a person instead of a box around them."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     let availability = LayerAvailability.available
@@ -152,8 +152,8 @@ final class PersonSegmentationLayer: VideoAILayer {
 
 final class InstanceMaskLayer: VideoAILayer {
     let id = "segmentation.instances"
-    let title = "Instance segmentation"
-    let detail = "Separate pixel mask per foreground thing, people or not."
+    let title = "Cut out each thing"
+    let detail = "Traces the exact outline of every separate thing in front, people or not."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     let availability = LayerAvailability.available
@@ -187,8 +187,8 @@ final class InstanceMaskLayer: VideoAILayer {
 
 final class OpticalFlowLayer: VideoAILayer {
     let id = "flow"
-    let title = "Optical flow"
-    let detail = "Per-pixel motion between frames. Expensive — runs at a few frames a second."
+    let title = "Motion map"
+    let detail = "Shows which way every part of the picture is moving. Heavy work, so it runs only a few times a second."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     let availability = LayerAvailability.available
@@ -311,7 +311,7 @@ final class SaliencyLayer: VideoAILayer {
         } else {
             id = "saliency.objectness"
             title = "Saliency (objectness)"
-            detail = "Coherent objects, with no idea what they are — catches things no classifier names."
+            detail = "Finds solid things without naming them — it catches what the named detectors miss."
         }
     }
 
@@ -345,8 +345,8 @@ final class SaliencyLayer: VideoAILayer {
 /// is why this finds a thrown rock that no detector would ever classify.
 final class TrajectoryLayer: VideoAILayer {
     let id = "trajectories"
-    let title = "Trajectories"
-    let detail = "Fits parabolic paths — thrown or falling objects a classifier would miss."
+    let title = "Thrown or falling things"
+    let detail = "Spots an arcing path — something thrown or dropped — that an ordinary detector would miss."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     let availability = LayerAvailability.available
@@ -411,8 +411,8 @@ final class TrajectoryLayer: VideoAILayer {
 /// "similar clothes" would otherwise look like a broken face recogniser.
 final class ReIdentificationLayer: VideoAILayer {
     let id = "reid"
-    let title = "Re-identification"
-    let detail = "Matches people against ones seen earlier by overall appearance, not by face."
+    let title = "Same person again"
+    let detail = "Matches someone against people seen earlier by their overall look and clothing, not their face."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     let availability = LayerAvailability.available
@@ -577,8 +577,8 @@ final class ReIdentificationLayer: VideoAILayer {
 /// the activity.
 final class SceneAnomalyLayer: VideoAILayer {
     let id = "anomaly"
-    let title = "Scene anomaly"
-    let detail = "Learns what this view normally looks like, then flags frames that do not fit."
+    let title = "Something looks different"
+    let detail = "Learns what this view normally looks like, then tells you when something does not fit."
     let group = LayerGroup.vision
     let modality = LayerModality.video
     let availability = LayerAvailability.available

@@ -17,8 +17,8 @@ import Vision
 
 final class PrivacyBlurLayer: VideoAILayer {
     let id = "privacy.blur"
-    let title = "Face & body blur"
-    let detail = "Blurs detected faces, or whole people, in the preview and anything it feeds."
+    let title = "Blur faces and people"
+    let detail = "Blurs faces, or whole people, in the preview and in anything it records or sends."
     let group = LayerGroup.privacy
     let modality = LayerModality.video
     let availability = LayerAvailability.available
@@ -157,8 +157,8 @@ final class PrivacyBlurLayer: VideoAILayer {
 /// detection to be correct, which makes it the one redaction that cannot fail.
 final class RegionRedactionLayer: VideoAILayer {
     let id = "privacy.redact"
-    let title = "Region redaction"
-    let detail = "Blanks out fixed areas you draw, with no detection involved."
+    let title = "Black out an area"
+    let detail = "Blanks out areas you draw. Nothing inside them is ever looked at or recorded."
     let group = LayerGroup.privacy
     let modality = LayerModality.video
     var availability: LayerAvailability {

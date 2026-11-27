@@ -130,7 +130,7 @@ struct SettingsView: View {
                                 else { settings.alertCategories.remove(cat) }
                             }))
                     }
-                    Text("People, vehicles and animals are named by an on-device classifier. \"Unidentified movement\" catches anything coherent it cannot name — useful, but the noisiest setting here.")
+                    Text("People, vehicles and animals are named on this device. \"Unidentified movement\" catches anything solid it cannot put a name to — useful, but the noisiest setting here.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 

@@ -100,7 +100,12 @@ struct FeedPickerView: View {
                 row(title: camera.name,
                     subtitle: camera.subtitle,
                     icon: icon(for: camera.serviceType),
-                    selected: engine.feedDescription == camera.workingURL?.host,
+                    // Both sides are optional, so a camera with no working
+                    // address compared equal to "no outside feed running" and
+                    // every unusable device on the network drew a tick as if it
+                    // were the one being watched.
+                    selected: camera.workingURL != nil
+                        && engine.feedDescription == camera.workingURL?.host,
                     busy: discovery.probing.contains(camera.id)) {
                     guard let url = camera.workingURL else { return }
                     engine.useExternalFeed(url: url)

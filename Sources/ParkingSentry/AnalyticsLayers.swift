@@ -9,8 +9,8 @@ import CoreGraphics
 
 final class ZoneOccupancyLayer: DerivedAILayer {
     let id = "zones"
-    let title = "Zones & dwell"
-    let detail = "Counts what is inside each drawn zone and how long it has stayed."
+    let title = "Zones and time spent"
+    let detail = "Counts what is inside each zone you draw, and how long it stays there."
     let group = LayerGroup.analytics
     let modality = LayerModality.derived
     var availability: LayerAvailability {
@@ -91,8 +91,8 @@ final class ZoneOccupancyLayer: DerivedAILayer {
 
 final class LineCrossingLayer: DerivedAILayer {
     let id = "lines"
-    let title = "Line crossing"
-    let detail = "Counts crossings of each drawn line, separately in each direction."
+    let title = "Count crossings"
+    let detail = "Counts anything that crosses a line you draw, each direction counted separately."
     let group = LayerGroup.analytics
     let modality = LayerModality.derived
     var availability: LayerAvailability {
@@ -165,8 +165,8 @@ final class LineCrossingLayer: DerivedAILayer {
 
 final class HeatmapLayer: DerivedAILayer {
     let id = "heatmap"
-    let title = "Heatmap"
-    let detail = "Where things have been, accumulated over the whole session."
+    let title = "Where things have been"
+    let detail = "Builds up a picture of the spots that get used most over the whole session."
     let group = LayerGroup.analytics
     let modality = LayerModality.derived
     let availability = LayerAvailability.available
@@ -237,8 +237,8 @@ final class HeatmapLayer: DerivedAILayer {
 /// time in data the tracker already holds, which is the only reason they are cheap.
 final class BehaviourFlagsLayer: DerivedAILayer {
     let id = "behaviour"
-    let title = "Behaviour flags"
-    let detail = "Loitering, abandoned objects, and two things converging fast."
+    let title = "Things worth a look"
+    let detail = "Someone hanging around too long, a bag left behind, or two things closing on each other fast."
     let group = LayerGroup.analytics
     let modality = LayerModality.derived
     let availability = LayerAvailability.available
@@ -320,8 +320,8 @@ final class BehaviourFlagsLayer: DerivedAILayer {
 /// cannot.
 final class TrendLayer: DerivedAILayer {
     let id = "trend"
-    let title = "Trend"
-    let detail = "Arrival rate now versus the last hour, per minute."
+    let title = "Busier or quieter"
+    let detail = "How fast things are arriving now compared with the last hour."
     let group = LayerGroup.analytics
     let modality = LayerModality.derived
     let availability = LayerAvailability.available

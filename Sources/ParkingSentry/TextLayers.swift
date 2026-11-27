@@ -87,8 +87,8 @@ class TextDrivenLayer: VideoAILayer {
 
 final class SentimentLayer: TextDrivenLayer {
     override var id: String { "text.sentiment" }
-    override var title: String { "Sentiment" }
-    override var detail: String { "Scores the tone of what has been said or read, -1 to +1." }
+    override var title: String { "Positive or negative" }
+    override var detail: String { "Rates whether what was said or read comes across as positive or negative." }
 
     private let tagger = NLTagger(tagSchemes: [.sentimentScore])
 
@@ -120,8 +120,8 @@ final class SentimentLayer: TextDrivenLayer {
 
 final class EntityLayer: TextDrivenLayer {
     override var id: String { "text.entities" }
-    override var title: String { "Named entities" }
-    override var detail: String { "Pulls people, places and organizations out of the text." }
+    override var title: String { "People, places and companies" }
+    override var detail: String { "Picks the names of people, places and organisations out of what was said or read." }
 
     private let tagger = NLTagger(tagSchemes: [.nameType])
     private var reported = Set<String>()
@@ -174,8 +174,8 @@ final class EntityLayer: TextDrivenLayer {
 /// just reporting.
 final class KeywordLayer: TextDrivenLayer {
     override var id: String { "text.keywords" }
-    override var title: String { "Keywords & intent" }
-    override var detail: String { "Watches for words you choose and raises an alert on a hit." }
+    override var title: String { "Watch for your own words" }
+    override var detail: String { "Watches for words you pick and alerts you the moment one is said or read." }
     override var availability: LayerAvailability {
         if Settings.shared.live.watchKeywords.trimmingCharacters(in: .whitespaces).isEmpty {
             return .needsSetup("Add words to watch for in Settings")
