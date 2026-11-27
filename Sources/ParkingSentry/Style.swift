@@ -204,12 +204,14 @@ struct SentryToolButton: View {
                             .offset(x: 6, y: -4)
                     }
                 }
+                // Inside the label, not on the Button. Without it the tappable
+                // region is whatever the glyph happens to paint — the opaque
+                // strokes of an SF Symbol and nothing else — so a 46pt button
+                // answered on a fraction of itself and felt broken. A badge
+                // hanging outside the circle is decoration, so the hit shape
+                // stays the control, not the drawn bounds.
+                .contentShape(Circle())
         }
-        // Without this the tappable region is whatever the glyph happens to
-        // paint — the opaque pixels of an SF Symbol and nothing else — so a
-        // 46pt button answered only in the middle of the stroke and felt
-        // broken. The circle makes the whole control tappable.
-        .contentShape(Circle())
         .buttonStyle(.plain)
         .accessibilityLabel(label ?? icon)
     }
